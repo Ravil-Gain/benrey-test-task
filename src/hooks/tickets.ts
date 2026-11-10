@@ -25,11 +25,9 @@ export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
   const status = data.status as TicketStatus | undefined
 
   if (operation === 'create') {
-    // A create is a move out of "New": the same map and assignee guard as an update.
-    const error = validateInitialStatus({
-      status: status ?? INITIAL_STATUS,
-      hasAssignee: Boolean(data.assignee),
-    })
+    // Every ticket starts as "New". Other statuses are reached through updates, where the
+    // transition map and the assignee guard apply.
+    const error = validateInitialStatus(status ?? INITIAL_STATUS)
     if (error) {
       throw new ValidationError({
         collection: 'tickets',
@@ -57,9 +55,8 @@ export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
     }
   }
 
-  // Stamp the time when a ticket enters resolved or closed. A new ticket can start as
-  // closed (spam, duplicate), so create counts too.
-  const enteredStatus = operation === 'create' || (status && status !== originalDoc?.status)
+  // Stamp the time when a ticket enters resolved or closed.
+  const enteredStatus = operation === 'update' && status && status !== originalDoc?.status
   if (enteredStatus && status === 'resolved') {
     data.resolvedAt = nowIso
   }

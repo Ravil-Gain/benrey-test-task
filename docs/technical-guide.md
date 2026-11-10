@@ -50,7 +50,7 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   │   │   └── layout.tsx
 │   │   └── (frontend)/          Root URL (redirects to /admin) and /healthz for Render
 │   ├── collections/             One file per collection: fields, access, admin options
-│   ├── components/              Custom admin components (bulk status bar on the tickets list)
+│   ├── components/              Custom admin components: bulk status bar on the tickets list, ticket status field
 │   ├── endpoints/               Custom REST endpoints (bulk status)
 │   ├── hooks/                   Collection hooks that run on every write: ticket workflow, media checks, user creation guard
 │   ├── lib/                     Pure logic with no Payload import: workflow, due dates, roles, env, upload rules, bulk batching, CORS rule, migration guard
@@ -301,12 +301,16 @@ Defined in one place: `src/lib/ticketStatus.ts`. Used by the `tickets` hook (`sr
 Guards on top of the transitions:
 - Moving to `in_progress` requires an assignee. The check looks at the incoming `assignee` if the request sends one, and at the stored `assignee` otherwise. Clearing the assignee in the same request is handled.
 - Setting the status to its current value is a no-op and always allowed.
-- **Creating a ticket counts as a move out of `new`** (`validateInitialStatus`). A ticket can be created as `new`, or one allowed step from it: `in_progress` with an assignee, or `closed` (spam, a duplicate). Creating it as `waiting_customer` or `resolved` is refused with "A new ticket cannot start as …". Before this rule the checks ran on updates only, so a ticket could be created directly as `in_progress` without an assignee, or as `resolved`. Duplicating a resolved ticket in the admin is refused for the same reason: set the copy to New first.
+- **Every ticket starts as `new`** (`validateInitialStatus`). Creating a ticket in any other status is refused with "A new ticket starts as "New", not …". Other statuses are reached through updates, where the map and the assignee guard apply. Before this rule the checks ran on updates only, so a ticket could be created directly as `in_progress` without an assignee, or as `resolved`.
+
+What the admin offers (it only keeps people from picking a status the server would refuse; the hook still checks every change):
+- **Create form:** the status shows "New", read-only, with the hint "New tickets start as "New".". It is not hidden with `admin.condition`: Payload then treats the field as optional and generates a migration that drops the column's `NOT NULL`, which would weaken the database constraint. That migration was generated once during this work and deleted.
+- **Edit form:** `src/components/TicketStatusField.tsx` wraps Payload's `SelectField` and offers only the saved status and its allowed next steps (`statusChoices`, through `src/lib/statusField.ts`), with a hint such as "From "Resolved" the ticket can move to "In progress" or "Closed"." The steps come from the saved status, not the value picked in the form, so picking "In progress" does not unlock the steps after it before saving. A closed ticket shows only "Closed" and "is final". The select has no clear button.
+- **Duplicate:** `beforeDuplicate` hooks reset the copy's status to `new` and clear `resolvedAt` and `closedAt`, so a copy of a resolved ticket is a new ticket.
 
 Timestamps:
 - Entering `resolved` sets `resolvedAt`.
 - Entering `closed` sets `closedAt`.
-- A ticket created as `closed` gets `closedAt` on create.
 
 ### 8.2 Why it is a hook
 
@@ -433,7 +437,7 @@ Route: `POST /api/tickets/bulk-status`. Defined in `src/collections/Tickets.ts` 
 
 ### 10.1 The bulk status bar in the admin
 
-`src/components/BulkStatusBar.tsx`, registered as `admin.components.beforeListTable` on `tickets` (see `importMap.js`). It is the only custom admin component so far.
+`src/components/BulkStatusBar.tsx`, registered as `admin.components.beforeListTable` on `tickets` (see `importMap.js`). The ticket status field (section 8.1) is the other custom admin component.
 
 **What the user sees.** Select rows in the tickets list, and a bar appears above the table: "Change status of N selected tickets to [status] Apply". After a confirmation dialog the bar shows progress ("Updating 200 / 500…"), then a toast with the outcome. Tickets that did not move stay listed under the bar, grouped by reason, each linked to the ticket by its subject. The list reloads with the new statuses and the selection is cleared.
 
@@ -617,7 +621,7 @@ Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, `PAYLOAD_PUBLIC_SERVER_URL`, the
 
 - **Deterministic.** A seeded pseudo-random generator (`src/seed/random.ts`, mulberry32) with a fixed seed. The same run produces the same data. A bug on seeded data is reproducible.
 - **Weighted.** Priorities: low 15, normal 50, high 25, urgent 10 (relative weights). Statuses: new 20, in progress 25, waiting for customer 15, resolved 20, closed 20.
-- **Through the workflow.** Any status other than `new` gets an assignee. Each ticket is created at the first step of the shortest allowed path from `new` (`statusPath` in `src/lib/ticketStatus.ts`), then moved one step at a time, so the tickets hook checks every step and sets the timestamps. `waiting_customer` and `resolved` tickets take one extra update (via `in_progress`).
+- **Through the workflow.** Any status other than `new` gets an assignee. Each ticket is created as `new`, then moved one step at a time along the shortest allowed path (`statusPath` in `src/lib/ticketStatus.ts`), so the tickets hook checks every step and sets the timestamps. A ticket takes one update for `in_progress` or `closed` and two for `waiting_customer` or `resolved`.
 - **Some overdue tickets.** About 30% of open tickets get a due date between 1 and 30 days in the past, so the overdue state has real examples. This is done with one extra update per ticket after creation.
 - **Comments.** 0 to 5 per ticket. About 8% have an attachment.
 
@@ -654,8 +658,9 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 
 | File | Covers |
 |---|---|
-| `ticketStatus.test.ts` | Every allowed transition, a set of rejected transitions, the closed terminal state, the assignee guard, same-status no-op, status validation, which statuses a new ticket may start in, and the shortest path between statuses (every step allowed, every status reachable from New) |
-| `ticketsHook.test.ts` | The tickets hook with a fake request: the create rule (start statuses, assignee guard, due date, `closedAt`), the update rule (allowed and refused steps, assignee being saved versus stored), and server-set comment author and time |
+| `ticketStatus.test.ts` | Every allowed transition, a set of rejected transitions, the closed terminal state, the assignee guard, same-status no-op, status validation, New as the only start status, the statuses the edit form offers (`statusChoices`, never a refused step), and the shortest path between statuses (every step allowed, every status reachable from New) |
+| `ticketsHook.test.ts` | The tickets hook with a fake request: the create rule (New only, due date, no timestamps), the update rule (allowed and refused steps, assignee being saved versus stored, `resolvedAt` and `closedAt` stamping), and server-set comment author and time |
+| `statusField.test.ts` | The status field's options on the create and edit forms: saved status plus allowed steps in workflow order, labels kept, the hint text, a closed ticket as final, fallback to New for an unsaved or unknown status |
 | `dueDate.test.ts` | The four SLA windows, overdue before and after the due time, resolved and closed never overdue, missing due date, ISO string input |
 | `access.test.ts` | `hasRole` with valid and malformed users, `isAdmin`, `isStaff` for admin, agent, both, anonymous |
 | `uploadRules.test.ts` | Magic bytes for each allowed type, HTML sent as an image, a header that is too short, NUL bytes in text, extension match and mismatch, the 5 MB boundary, and the order of the checks |
@@ -678,7 +683,7 @@ None of them needs a database or R2, so the whole suite runs in under a second (
 - **Access rules end to end**: the agent gets 403 on delete, the admin gets 200.
 - **Deploy scripts against real services**: `pnpm migrate` (the table check and the adapter call) and `pnpm r2:cors` (the S3 calls). The rules they use are unit tested. Both were run by hand: `pnpm migrate` stopped with exit code 1 on the dev branch's marker row, and `pnpm r2:cors` set the rule that the browser upload then passed.
 - **Uploads against real services**: the `media` hooks and the signed-URL wrapper are unit tested with fakes (section 14.1). Not covered by tests: `deleteFolder` against R2 (listing and batch delete), the real `payload_kv` table, and Payload passing the receipt and temp file to the hook. These are checked by a live script that is not in the repo and by hand in the admin.
-- **Admin UI**: login, list filters, inline comments, and the bulk status bar component (its rules are unit tested, the clicks were checked by hand in section 10.1).
+- **Admin UI**: login, list filters, inline comments, the bulk status bar and the ticket status field. Their rules are unit tested, and the forms were checked by hand on the dev server (sections 8.1 and 10.1).
 - **Roles through the API**: an agent gets 403 on delete, a no-role user cannot log in to the admin, and the CSRF origin check rejects foreign origins.
 
 Planned: integration tests with Vitest against a Neon test branch, and a few Playwright end-to-end tests for the admin. Both are listed in [section 17](#17-known-limitations-and-next-steps).

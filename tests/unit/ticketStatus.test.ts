@@ -4,6 +4,7 @@ import {
   INITIAL_STATUS,
   TICKET_STATUSES,
   isTicketStatus,
+  statusChoices,
   statusPath,
   validateInitialStatus,
   validateStatusChange,
@@ -58,30 +59,39 @@ describe('isTicketStatus', () => {
 })
 
 describe('validateInitialStatus', () => {
-  it('lets a ticket start as New, with or without an assignee', () => {
+  it('lets a ticket start as New only', () => {
     expect(INITIAL_STATUS).toBe('new')
-    expect(validateInitialStatus({ status: 'new', hasAssignee: false })).toBeNull()
-    expect(validateInitialStatus({ status: 'new', hasAssignee: true })).toBeNull()
+    expect(validateInitialStatus('new')).toBeNull()
   })
 
-  it('lets a ticket start one allowed step from New', () => {
-    expect(validateInitialStatus({ status: 'in_progress', hasAssignee: true })).toBeNull()
-    expect(validateInitialStatus({ status: 'closed', hasAssignee: false })).toBeNull()
-  })
-
-  it('applies the assignee guard to a ticket that starts in progress', () => {
-    expect(validateInitialStatus({ status: 'in_progress', hasAssignee: false })).toBe(
-      'Assign an agent before moving the ticket to "In progress".',
+  it('refuses every other start status, also ones one step from New', () => {
+    for (const status of TICKET_STATUSES.filter((value) => value !== 'new')) {
+      expect(validateInitialStatus(status)).toMatch(/A new ticket starts as "New", not /)
+    }
+    expect(validateInitialStatus('resolved')).toBe(
+      'A new ticket starts as "New", not "Resolved". Change the status after the ticket is created.',
     )
   })
+})
 
-  it('refuses statuses that need work on the ticket first', () => {
-    expect(validateInitialStatus({ status: 'resolved', hasAssignee: true })).toBe(
-      'A new ticket cannot start as "Resolved". Create it as "New" and move it through the workflow.',
-    )
-    expect(validateInitialStatus({ status: 'waiting_customer', hasAssignee: true })).toMatch(
-      /cannot start as "Waiting for customer"/,
-    )
+describe('statusChoices', () => {
+  it('offers only New for a ticket that is not saved yet', () => {
+    expect(statusChoices(undefined)).toEqual(['new'])
+  })
+
+  it('offers the current status first, then the allowed next steps', () => {
+    expect(statusChoices('new')).toEqual(['new', 'in_progress', 'closed'])
+    expect(statusChoices('in_progress')).toEqual(['in_progress', 'waiting_customer', 'resolved'])
+    expect(statusChoices('resolved')).toEqual(['resolved', 'in_progress', 'closed'])
+    expect(statusChoices('closed')).toEqual(['closed'])
+  })
+
+  it('never offers a step the workflow refuses', () => {
+    for (const from of TICKET_STATUSES) {
+      for (const to of statusChoices(from)) {
+        expect(validateStatusChange({ from, to, hasAssignee: true })).toBeNull()
+      }
+    }
   })
 })
 
@@ -118,8 +128,7 @@ describe('statusPath', () => {
     for (const status of TICKET_STATUSES) {
       const path = statusPath(INITIAL_STATUS, status)
       expect(path).not.toBeNull()
-      const first = path![0] ?? INITIAL_STATUS
-      expect(validateInitialStatus({ status: first, hasAssignee: true })).toBeNull()
+      expect(path!.every((step) => TICKET_STATUSES.includes(step))).toBe(true)
     }
   })
 })

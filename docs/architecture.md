@@ -383,6 +383,7 @@ Access by role:
 | 2026-11-11 | Bulk status bar in the admin | The first `admin.components` extension (ADR-010): a `beforeListTable` bar on tickets that sends selected ids to the bulk endpoint in batches of 100 and lists refused tickets by reason. Status error messages now use the status labels. No rule moved into the component. |
 | 2026-11-11 | Workflow applies to new tickets | Creating a ticket now counts as a move out of `new`: only `new`, `in_progress` with an assignee, or `closed` are accepted. Before, the checks ran on updates only. The seed walks each ticket through the workflow with `statusPath` instead of creating it in its final status. |
 | 2026-11-11 | Docs review | Agent Rules synced with CLAUDE.md: added the technical-guide sync rule, the no-default-role rule, and the CSRF allowlist rule, which were only in CLAUDE.md. |
+| 2026-11-11 | Status choices in the admin | Every ticket now starts as `new`: the create form shows the status read-only and the hook refuses any other start status. The field is not hidden with `admin.condition`, because that would make the column nullable. The edit form's status select (a custom field component) offers only the saved status and its allowed next steps. Duplicates start as `new`. The seed creates every ticket as `new` and walks it to its status. |
 
 ---
 To update, run `/planfirst` again.

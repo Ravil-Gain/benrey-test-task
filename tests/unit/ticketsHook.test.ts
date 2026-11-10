@@ -41,24 +41,18 @@ describe('beforeTicketChange on create', () => {
     expect(() => run('create', { priority: 'normal' })).not.toThrow()
   })
 
-  it('refuses a ticket created as Resolved or Waiting for customer', () => {
-    expect(statusError(() => run('create', { status: 'resolved', assignee: 3 }))).toMatch(
-      /cannot start as "Resolved"/,
-    )
-    expect(statusError(() => run('create', { status: 'waiting_customer', assignee: 3 }))).toMatch(
-      /cannot start as "Waiting for customer"/,
-    )
+  it('refuses every other start status, including ones one step from New', () => {
+    for (const status of ['in_progress', 'waiting_customer', 'resolved', 'closed'] as const) {
+      expect(statusError(() => run('create', { status, assignee: 3 }))).toMatch(
+        /A new ticket starts as "New", not /,
+      )
+    }
   })
 
-  it('refuses a ticket created In progress without an assignee', () => {
-    expect(statusError(() => run('create', { status: 'in_progress' }))).toMatch(/Assign an agent/)
-    expect(() => run('create', { status: 'in_progress', assignee: 3 })).not.toThrow()
-  })
-
-  it('accepts a ticket created as Closed and stamps closedAt', () => {
-    const data = run('create', { status: 'closed' })
-    expect(typeof data.closedAt).toBe('string')
+  it('sets no resolved or closed time on create', () => {
+    const data = run('create', { status: 'new' })
     expect(data.resolvedAt).toBeUndefined()
+    expect(data.closedAt).toBeUndefined()
   })
 })
 
@@ -68,6 +62,13 @@ describe('beforeTicketChange on update', () => {
   it('allows a workflow step and stamps resolvedAt', () => {
     const data = run('update', { status: 'resolved' }, original)
     expect(typeof data.resolvedAt).toBe('string')
+  })
+
+  it('stamps closedAt when a ticket is closed, and not again when it stays closed', () => {
+    const closing = run('update', { status: 'closed' }, { status: 'resolved' } as Data)
+    expect(typeof closing.closedAt).toBe('string')
+    const unchanged = run('update', { status: 'closed', priority: 'low' }, { status: 'closed' } as Data)
+    expect(unchanged.closedAt).toBeUndefined()
   })
 
   it('refuses a step outside the workflow', () => {

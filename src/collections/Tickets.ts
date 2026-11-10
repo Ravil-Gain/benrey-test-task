@@ -2,7 +2,12 @@ import type { CollectionConfig } from 'payload'
 
 import { isAdmin, isStaff } from '../lib/access'
 import { isOverdue, TICKET_PRIORITIES } from '../lib/dueDate'
-import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from '../lib/ticketStatus'
+import {
+  INITIAL_STATUS,
+  TICKET_STATUS_LABELS,
+  TICKET_STATUSES,
+  type TicketStatus,
+} from '../lib/ticketStatus'
 import { beforeTicketChange } from '../hooks/tickets'
 import { bulkStatus } from '../endpoints/bulkStatus'
 
@@ -56,10 +61,25 @@ export const Tickets: CollectionConfig = {
       name: 'status',
       type: 'select',
       required: true,
-      defaultValue: 'new',
+      defaultValue: INITIAL_STATUS,
       options: TICKET_STATUSES.map((value) => ({ label: TICKET_STATUS_LABELS[value], value })),
-      // The transition rules are checked in beforeTicketChange, not here.
-      admin: { position: 'sidebar' },
+      // The transition rules are checked in beforeTicketChange, not here. The form only
+      // keeps people from picking a status the server would refuse.
+      admin: {
+        position: 'sidebar',
+        // A ticket always has a status, so the select has no clear button.
+        isClearable: false,
+        components: {
+          // Offers the current status and the allowed next steps only. On the create form
+          // it shows "New" read-only. (An admin.condition would hide it too, but Payload then
+          // treats the column as nullable and drops its NOT NULL constraint.)
+          Field: '/components/TicketStatusField#TicketStatusField',
+        },
+      },
+      hooks: {
+        // A copy is a new ticket, so it starts as "New" too.
+        beforeDuplicate: [() => INITIAL_STATUS],
+      },
     },
     {
       name: 'priority',
@@ -117,11 +137,13 @@ export const Tickets: CollectionConfig = {
       name: 'resolvedAt',
       type: 'date',
       admin: serverDate,
+      hooks: { beforeDuplicate: [() => null] },
     },
     {
       name: 'closedAt',
       type: 'date',
       admin: serverDate,
+      hooks: { beforeDuplicate: [() => null] },
     },
     {
       name: 'comments',

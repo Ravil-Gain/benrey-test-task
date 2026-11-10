@@ -53,26 +53,26 @@ export function validateStatusChange(input: {
   return null
 }
 
-// Every ticket starts here. Creating a ticket counts as a move out of this status, so the
-// same map and the same assignee guard apply to creates as to updates.
+// Every ticket starts here. The create form does not offer a status, and the tickets hook
+// refuses any other start status, so the workflow is the only way to reach the others.
 export const INITIAL_STATUS: TicketStatus = 'new'
 
 // Returns an error message if a new ticket may not start in `status`, or null if it may.
-// Allowed: "New", or a status reachable from "New" in one step ("In progress" with an
-// assignee, "Closed" for spam or a duplicate). "Waiting for customer" and "Resolved" need
-// work on the ticket first, so they are refused.
-export function validateInitialStatus(input: {
-  status: TicketStatus
-  hasAssignee: boolean
-}): string | null {
-  if (input.status === INITIAL_STATUS) {
+export function validateInitialStatus(status: TicketStatus): string | null {
+  if (status === INITIAL_STATUS) {
     return null
   }
-  if (!NEXT_STATUSES[INITIAL_STATUS].includes(input.status)) {
-    const label = TICKET_STATUS_LABELS[input.status]
-    return `A new ticket cannot start as "${label}". Create it as "${TICKET_STATUS_LABELS[INITIAL_STATUS]}" and move it through the workflow.`
+  const label = TICKET_STATUS_LABELS[status]
+  return `A new ticket starts as "${TICKET_STATUS_LABELS[INITIAL_STATUS]}", not "${label}". Change the status after the ticket is created.`
+}
+
+// The statuses the edit form offers for a ticket stored in `current`: the status it has now,
+// then the allowed next steps. Without a stored status (a new ticket) only "New".
+export function statusChoices(current: TicketStatus | undefined): TicketStatus[] {
+  if (!current) {
+    return [INITIAL_STATUS]
   }
-  return validateStatusChange({ from: INITIAL_STATUS, to: input.status, hasAssignee: input.hasAssignee })
+  return [current, ...NEXT_STATUSES[current]]
 }
 
 // The shortest list of allowed moves from `from` to `to`, not including `from`. Empty when
