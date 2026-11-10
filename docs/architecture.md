@@ -351,6 +351,7 @@ Access by role:
 - DO NOT build a separate SPA or a second admin UI. Extend the Payload admin only through `admin.components`.
 - DO NOT put business rules in React components or route handlers. Status transitions and validation MUST live in collection hooks or pure functions in `src/lib/` that hooks call.
 - Role restrictions MUST be enforced in collection `access` functions. A hidden button or hidden collection is not a restriction on its own.
+- Users MUST be created only by an admin or by server code through the local API (the seed). This MUST be enforced in a `users` hook, because Payload's first-user registration skips `access`. The first admin MUST come from `pnpm seed`, run right after the first deploy.
 - The bulk status endpoint and the AI endpoint MUST check the caller's role on the server, not only in the component.
 - Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run migrations with `pnpm migrate` before the server starts (`pnpm start:prod`). It wraps Payload's migrate and MUST fail on a dev-mode push. DO NOT use `push` in production, and DO NOT run `pnpm dev` against the production database.
 - Every upload MUST be validated on the server: MIME allowlist on the `media` collection, 5 MB size limit, a file signature (magic bytes) that matches the MIME type, and an extension that matches the MIME type. Browsers upload straight to R2 through `clientUploads` (staff only), and the server MUST create the `media` document only with a receipt it signed (ADR-022). Storage keys are a random UUID folder plus the sanitized client file name. The original name goes to `originalName`.
@@ -375,6 +376,7 @@ Access by role:
 | 2026-11-10 | Direct uploads to R2 | Browsers upload through Payload `clientUploads` with signed URLs (ADR-022). Storage keys are now `<uuid folder>/<client name>`, which replaces the UUID file-name rule in ADR-020 and ADR-021. Magic-byte and extension checks added, resolving the ADR-020 limitation. Updated Data Model, Use Now (R2), Cost Traps, and Agent Rules. |
 | 2026-11-10 | Upload fixes after a browser check | ADR-022 Why restated: direct uploads keep file bytes off the web service. Added ADR-023: the uploader's file name is kept for direct uploads through the key-value store. Upload rejections now return the reason as the top-level error message, so the admin shows it. Agent Rules: every code change MUST ship with Vitest tests. |
 | 2026-11-10 | Deploy to Render | Added ADR-024: Render Blueprint, migrations in the start command behind a dev-push guard, `/healthz`, pinned Node, https-only server origin with `Secure` cookies, R2 CORS from code. Updated Render in Use Now and the migration agent rule. |
+| 2026-11-11 | Close public first-user registration | Payload's first-register endpoint skips access checks, so an empty users table let anyone create an admin. A users `beforeOperation` hook now allows user creation only for admins and the local API (seed). `roles` gets field-level `create: isAdmin`. Found on the first Render deploy before seeding. |
 
 ---
 To update, run `/planfirst` again.

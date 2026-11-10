@@ -1,5 +1,6 @@
 import type { CollectionConfig } from 'payload'
 
+import { beforeUserOperation } from '../hooks/users'
 import { isAdmin, isStaff } from '../lib/access'
 import { env, useSecureCookies } from '../lib/env'
 
@@ -27,6 +28,10 @@ export const Users: CollectionConfig = {
     update: isAdmin,
     delete: isAdmin,
   },
+  hooks: {
+    // Also blocks Payload's public first-user registration, which skips `access`.
+    beforeOperation: [beforeUserOperation],
+  },
   fields: [
     {
       name: 'name',
@@ -45,6 +50,7 @@ export const Users: CollectionConfig = {
         { label: 'Agent', value: 'agent' },
       ],
       access: {
+        create: isAdmin,
         update: isAdmin,
       },
     },

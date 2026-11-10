@@ -627,6 +627,7 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `migrationGuard.test.ts` | The dev-push check: batch `-1` as a string (how Postgres returns it) and as a number, a migrated database, a fresh one, and the recovery message |
 | `r2Cors.test.ts` | The CORS rule: origin parsing, no `*`, no paths, duplicates removed, only `PUT` and the three signed headers |
 | `healthz.test.ts` | `/healthz` answers 200 with `no-store` and is never prerendered |
+| `usersHook.test.ts` | Who may create a user: admin over any API, the seed over the local API, nobody else. The users hook refuses the public first-user registration and agents, and leaves other operations to the access functions |
 | `mediaHooks.test.ts` | The `media` hooks with a fake request (Map-backed key-value store, logger) and a mocked `deleteFolder`: which operations are checked, each rejection reason as the 400 message with `path: "filename"`, the size read from the temp file and not the declared size, R2 folder cleanup with and without a prefix, a failed cleanup still returning the validation error, the stored name taken and deleted (also on rejection and when expired), fallbacks when nothing is stored or the store fails, and `originalName` set only on create |
 | `rememberOriginalNames.test.ts` | The signed-URL wrapper with a fake plugin handler and a fake key-value store: the name is stored under the signed folder, the body is read once and handed on, the response stays readable, nothing is stored on a refused request or without a name or folder, a store failure does not fail the upload, and startup fails without the plugin endpoint |
 | `originalName.test.ts` | Original-name cleaning (characters the key loses are kept, client paths and control characters removed, length cap, empty input), the store key, and reading a stored name back (fresh, expired, malformed) |
@@ -688,6 +689,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | HTTPS | Render terminates TLS and redirects http to https. The app refuses a non-https `PAYLOAD_PUBLIC_SERVER_URL` in production. | In place |
 | Debug output | `next start` runs with `NODE_ENV=production`. Payload returns generic messages for errors that are not public, without stack traces. There is no GraphQL route. | In place |
 | Default privileges | New accounts have no roles and no admin access. | In place |
+| First-user registration | Payload's `POST /api/users/first-register` creates the first user with `overrideAccess: true`, so it skips the `create` access function. With an empty users table, anyone could have created an admin. The `users` `beforeOperation` hook (`src/hooks/users.ts`, rule `mayCreateUser` in `src/lib/access.ts`) refuses every create that is not from an admin or from the local API. The first admin comes from `pnpm seed`. Checked against real Payload: the first-register call is refused with `Forbidden` and no row is written. | In place |
 | Admin login | Only staff roles can open the admin panel. | In place |
 | CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. A request with no `Origin` header falls back to `Sec-Fetch-Site`: `same-origin`, `same-site`, and `none` are accepted, and anything else is anonymous. Verified in Payload source. | In place |
 | Rate limiting | Not implemented. Login brute-force protection is not configured. | Known gap |
@@ -757,7 +759,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 1. **Neon:** create the production branch, or use `main`, and copy its connection string. It must be a different branch from the dev one. Keep `sslmode=require`.
 2. **Render:** New > Blueprint, pick this repository. Render reads `render.yaml` and asks for the `sync: false` values. For `PAYLOAD_PUBLIC_SERVER_URL` enter `https://<service-name>.onrender.com`, the URL Render shows for the service. Enter the R2 values from `.env`.
-3. **First deploy:** Render builds and starts. On an empty database `pnpm migrate` creates every table.
+3. **First deploy:** Render builds and starts. On an empty database `pnpm migrate` creates every table. The admin then shows Payload's "Create first user" form. It is refused by design (section 16): run the seed (step 5) right away, so the database does not sit without an admin.
 4. **R2 CORS:** `pnpm r2:cors https://<service-name>.onrender.com http://localhost:3000`.
 5. **Seed:** from a laptop, with the production connection string and new seed passwords that are not the dev ones:
    ```bash
