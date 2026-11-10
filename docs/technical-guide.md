@@ -713,12 +713,12 @@ If a command fails with `Missing required environment variable`, the `.env` file
 ### Planned next steps (in order)
 
 1. Apply migrations and seed the Neon dev branch. Done: the default 2,000-ticket seed took about 4 minutes.
-2. Deploy to Render: Blueprint, migrations at start, health check, R2 CORS, `Secure` cookies. Code done ([section 18](#18-deployment-on-render)). The first deploy and its smoke test are open.
+2. Deploy to Render: Blueprint, migrations at start, health check, R2 CORS, `Secure` cookies. Done: live at https://benrey-support-tickets.onrender.com, smoke test in [section 18.5](#185-first-deploy-results).
 3. Admin UI: bulk status action on the tickets list (custom component that calls the endpoint).
 4. Agent view of the admin: check that an agent sees a visibly restricted admin, and check list filters and search at 2,000 tickets in the browser.
 5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions.
 6. Integration tests for access rules and the bulk endpoint.
-7. Login rate limiting and security headers (including removing `X-Powered-By`).
+7. Login rate limiting and security headers: HSTS, CSP, frame options, and removing `X-Powered-By`. None of them is sent on Render yet.
 8. README for the project: setup, stack choice, decisions, what was skipped and why.
 9. OAuth (GitHub), only if time is left. Otherwise explained in the README as skipped.
 
@@ -784,3 +784,26 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Render logs | No errors. "Migrations are up to date." on start |
 
 The first request after 15 idle minutes wakes the free instance and takes about a minute. Open the URL once before sharing it.
+
+### 18.5 First deploy results
+
+Deployed on 2026-11-11 from `587955b`. Checked against the live URL:
+
+| Check | Result |
+|---|---|
+| `/healthz`, http to https, `/` to `/admin` | 200, 301, 307 |
+| Logged-out API: tickets, customers, media, users, files | 403 |
+| Logged-out bulk status endpoint | 401 |
+| `first-register` | 403, refused by the users hook |
+| GraphQL route | 404 (none) |
+| Users after the seed | 9: 1 admin, 8 agents, all created by the seed within 3 seconds. No other account |
+| Data | 2,000 tickets, 2,000 customers, 30 tags, 100 seeded media. The five status filters add up to 2,000 |
+| API timings from a browser in the EU | Single lists and filters 80 to 200 ms. 100 tickets with relations (`depth=1`) about 1.5 s |
+| Admin upload of a PNG | Straight to R2 (200, CORS passes), thumbnail served through the file route, `originalName` keeps `?` |
+| Admin upload of a text file named `.png` | Refused with "File content does not match its type.", its R2 folder is empty |
+| Agent: admin UI | Sidebar shows Customers, Tags, Tickets, Media. No Users entry, and `/admin/collections/users` is a 404. The ticket edit view has no delete button |
+| Agent: API | Reads tickets and users (needed for the assignee field). Creating a user, promoting itself to admin, deleting a ticket, and changing media all answer 403. Its roles stay `["agent"]` |
+
+**Found during the deploy.** Payload's first-user registration skipped access checks, so the empty production database briefly accepted an admin sign-up from anyone. It was fixed in `587955b` before the seed. The users list above shows no account outside the seed. Before the fix the absence of an extra account was not proven: the `create-first-user` string in the admin HTML is a route name and not a sign of an empty table.
+
+**Known gaps.** An invalid enum value in a filter (for example `status=open`) answers 500 with a generic message instead of 400. The admin's filter uses a dropdown, so it cannot send one. Security headers are not set yet (next steps, item 7).
