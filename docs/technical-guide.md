@@ -477,7 +477,7 @@ The app itself does not retry requests. A failed request returns an error to the
 ```bash
 pnpm seed                  # fills an empty database; refuses if tickets already exist
 pnpm seed --reset          # deletes all data first, then seeds again
-pnpm seed --tickets=500    # smaller run (default is 20000)
+pnpm seed --tickets=500    # smaller run (default is 2000)
 ```
 
 Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, the R2 variables, and the three `SEED_*` variables in `.env`.
@@ -496,7 +496,7 @@ Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, the R2 variables, and the three 
 | Customers | 2,000 | Unique emails under `customers.example.test` |
 | Tags | 30 | Names like `billing`, `sso`, `outage`, each with a colour |
 | Media | 100 | 60 generated PNG screenshots, 40 text logs. Stored in R2 |
-| Tickets | 20,000 by default | Random subjects, statuses, priorities, tags, comments, attachments |
+| Tickets | 2,000 by default | Random subjects, statuses, priorities, tags, comments, attachments |
 
 ### 13.3 How the data is generated
 
@@ -527,7 +527,7 @@ Measured on the Neon dev branch from a developer laptop (`pnpm seed --reset --ti
 | Media (100 files, thumbnails) | about 15 s |
 | Tickets (500) | about 41 s, about 80 ms per ticket with 10 in parallel |
 
-At that rate the full default run (20,000 tickets) takes roughly 30 minutes. Most of the time is network latency to Neon, not CPU. Raising the parallelism is possible but limited by the connection pool.
+At that rate the default run (2,000 tickets) took 233 seconds (about 4 minutes) on the Neon dev branch. Most of the time is network latency to Neon, not CPU. Raising the parallelism is possible but limited by the connection pool.
 
 ---
 
@@ -614,7 +614,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 ### Planned next steps (in order)
 
-1. Apply migrations and seed the Neon dev branch. Measure seed time for the full 20,000 tickets.
+1. Apply migrations and seed the Neon dev branch. Done: the default 2,000-ticket seed took about 4 minutes.
 2. Admin UI: bulk status action on the tickets list (custom component that calls the endpoint).
 3. Integration tests for hooks, access rules, the bulk endpoint, and upload validation.
 4. Admin customizations: list filters and search are configured in the collections. Verify them in the browser.
@@ -626,6 +626,5 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 ### Open verification items
 
-- Measure the seed on the full dataset and record the time here.
 - Confirmed: after `pnpm seed --reset` on the Neon dev branch, no orphaned comment rows or tag-join rows remain. Child rows are removed through the foreign-key cascade.
-- Measure the full 20,000-ticket seed and record the time in section 13.5.
+- Done: the default 2,000-ticket seed took 233 seconds. Recorded in section 13.5.

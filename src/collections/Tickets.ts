@@ -6,13 +6,20 @@ import { TICKET_STATUSES, type TicketStatus } from '../lib/ticketStatus'
 import { beforeTicketChange } from '../hooks/tickets'
 import { bulkStatus } from '../endpoints/bulkStatus'
 
-const STATUS_LABELS: Record<(typeof TICKET_STATUSES)[number], string> = {
+const STATUS_LABELS: Record<TicketStatus, string> = {
   new: 'New',
   in_progress: 'In progress',
   waiting_customer: 'Waiting for customer',
   resolved: 'Resolved',
   closed: 'Closed',
 }
+
+// Dates the server fills in. They show in the sidebar but nobody types them.
+const serverDate = {
+  readOnly: true,
+  position: 'sidebar',
+  date: { pickerAppearance: 'dayAndTime' },
+} as const
 
 export const Tickets: CollectionConfig = {
   slug: 'tickets',
@@ -55,7 +62,7 @@ export const Tickets: CollectionConfig = {
       required: true,
       defaultValue: 'new',
       options: TICKET_STATUSES.map((value) => ({ label: STATUS_LABELS[value], value })),
-      // Changes go through the transition rules in the beforeChange hook.
+      // The transition rules are checked in beforeTicketChange, not here.
       admin: { position: 'sidebar' },
     },
     {
@@ -91,9 +98,10 @@ export const Tickets: CollectionConfig = {
     {
       name: 'dueAt',
       type: 'date',
-      admin: { readOnly: true, position: 'sidebar', date: { pickerAppearance: 'dayAndTime' } },
+      admin: serverDate,
     },
     {
+      // Not stored. Worked out every time the ticket is read.
       name: 'isOverdue',
       type: 'checkbox',
       virtual: true,
@@ -112,19 +120,19 @@ export const Tickets: CollectionConfig = {
     {
       name: 'resolvedAt',
       type: 'date',
-      admin: { readOnly: true, position: 'sidebar', date: { pickerAppearance: 'dayAndTime' } },
+      admin: serverDate,
     },
     {
       name: 'closedAt',
       type: 'date',
-      admin: { readOnly: true, position: 'sidebar', date: { pickerAppearance: 'dayAndTime' } },
+      admin: serverDate,
     },
     {
       name: 'comments',
       type: 'array',
       labels: { singular: 'Comment', plural: 'Comments' },
       admin: {
-        description: 'Comments are edited inline with the ticket. Author and time are set by the server.',
+        description: 'Edit comments right here. The server fills in the author and time.',
       },
       fields: [
         {

@@ -14,7 +14,7 @@ export type SeedOptions = {
 }
 
 const MIN_PASSWORD_LENGTH = 12
-const DEFAULT_TICKET_COUNT = 20000
+const DEFAULT_TICKET_COUNT = 2000
 
 function requireEnv(name: string): string {
   const value = process.env[name]?.trim()

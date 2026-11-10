@@ -1,9 +1,5 @@
-/**
- * Role helpers used by collection access functions.
- *
- * Roles are stored on the `users` collection as a `roles` array. These helpers
- * accept `unknown` so they can be called with whatever `req.user` Payload gives.
- */
+// Role checks for collection access functions.
+// Roles live on users.roles. These take `unknown` because req.user can be anything.
 
 export type Role = 'admin' | 'agent'
 
@@ -19,6 +15,6 @@ type RequestLike = { req: { user?: unknown } }
 
 export const isAdmin = ({ req }: RequestLike): boolean => hasRole(req.user, 'admin')
 
-/** Admins and agents. Anyone with a staff role can work on tickets. */
+// Admins and agents. Anyone with a staff role can work on tickets.
 export const isStaff = ({ req }: RequestLike): boolean =>
   hasRole(req.user, 'admin') || hasRole(req.user, 'agent')

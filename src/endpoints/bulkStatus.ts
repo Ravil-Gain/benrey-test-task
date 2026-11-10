@@ -6,13 +6,10 @@ import { isTicketStatus } from '../lib/ticketStatus'
 
 export const MAX_BULK_SIZE = 500
 
-/**
- * POST /api/tickets/bulk-status  { ids: number[], status: TicketStatus }
- *
- * Each ticket is updated through the normal Payload update path with access
- * control on. The same status hook runs per ticket, so a bulk change follows the
- * same rules as a single change. One invalid ticket does not stop the others.
- */
+// POST /api/tickets/bulk-status  { ids: number[], status: TicketStatus }
+//
+// Each ticket goes through payload.update with access control on, so the same
+// workflow hook runs for every one. A bad ticket lands in `failed` and the rest still update.
 export const bulkStatus: PayloadHandler = async (req) => {
   if (!req.user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
@@ -21,22 +18,15 @@ export const bulkStatus: PayloadHandler = async (req) => {
     return Response.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  let body: unknown
+  let body: { ids?: unknown; status?: unknown }
   try {
-    body = await req.json?.()
+    body = (await req.json?.()) ?? {}
   } catch {
     return Response.json({ error: 'Request body must be JSON' }, { status: 400 })
   }
+  const { ids, status } = body
 
-  const { ids, status } = (body ?? {}) as { ids?: unknown; status?: unknown }
-
-  const idsValid =
-    Array.isArray(ids) &&
-    ids.length > 0 &&
-    ids.length <= MAX_BULK_SIZE &&
-    ids.every((id) => typeof id === 'number' && Number.isInteger(id) && id > 0)
-
-  if (!idsValid) {
+  if (!isIdList(ids)) {
     return Response.json(
       { error: `ids must be 1 to ${MAX_BULK_SIZE} positive integers` },
       { status: 400 },
@@ -49,7 +39,7 @@ export const bulkStatus: PayloadHandler = async (req) => {
   const updated: number[] = []
   const failed: { id: number; error: string }[] = []
 
-  for (const id of ids as number[]) {
+  for (const id of ids) {
     try {
       await req.payload.update({
         collection: 'tickets',
@@ -65,6 +55,15 @@ export const bulkStatus: PayloadHandler = async (req) => {
   }
 
   return Response.json({ updated: updated.length, failed })
+}
+
+function isIdList(ids: unknown): ids is number[] {
+  return (
+    Array.isArray(ids) &&
+    ids.length > 0 &&
+    ids.length <= MAX_BULK_SIZE &&
+    ids.every((id) => Number.isInteger(id) && id > 0)
+  )
 }
 
 function describeError(error: unknown): string {

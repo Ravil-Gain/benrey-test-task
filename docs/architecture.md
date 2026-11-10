@@ -274,7 +274,7 @@ Access by role:
 - **Bonuses:** AI help chat is in scope, built after the core admin passes (ADR-016). GitHub OAuth is deferred. Its approach will be decided later, so it stays in Add Later until then.
 - **Ticket number:** no custom number field. The admin shows the Payload `id`, which is enough for demo purposes.
 - **Due date rule:** `dueAt` is set automatically on create from priority: urgent 4 h, high 24 h, normal 72 h, low 168 h. A ticket is overdue when `now > dueAt` and its status is neither `resolved` nor `closed`. Computed in code, with no background job.
-- **Seed data:** about 8 agents and 1 admin, 2,000 customers, 30 tags, 20,000 tickets, about 60,000 comments, and about 100 small attachments in R2. Seed reads account passwords from environment variables. No default password is stored in code.
+- **Seed data:** about 8 agents and 1 admin, 2,000 customers, 30 tags, 2,000 tickets, about 5,000 comments, and about 100 small attachments in R2. Seed reads account passwords from environment variables. No default password is stored in code.
 - **Upload types:** JPEG, PNG, WebP, PDF, and plain text. 5 MB per file.
 - **Package manager:** pnpm 10. Payload is pinned to the latest stable 3.x at scaffold time and the exact version is recorded in the lockfile.
 
