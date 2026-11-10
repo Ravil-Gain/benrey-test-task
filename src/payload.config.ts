@@ -14,6 +14,7 @@ import { Media } from './collections/Media'
 import { Tags } from './collections/Tags'
 import { Tickets } from './collections/Tickets'
 import { Users } from './collections/Users'
+import { rememberOriginalNames } from './plugins/rememberOriginalNames'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -78,6 +79,8 @@ export default buildConfig({
         },
       },
     }),
+    // Must come after s3Storage: wraps its signed-URL endpoint to keep the uploader's file name.
+    rememberOriginalNames,
   ],
   sharp,
   typescript: {
