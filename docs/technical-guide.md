@@ -431,6 +431,8 @@ Route: `POST /api/tickets/bulk-status`. Defined in `src/collections/Tickets.ts` 
 
 **Checked in the admin (dev server).** Three tickets to "In progress": the waiting one moved, the one without an assignee and the closed one stayed, with their reasons. "Select all" with the search "SSO" across 2-row pages: the id query carried `subject like SSO`, 4 of 5 moved to Closed, the in-progress one was refused, and no ticket outside the search changed.
 
+**Checked on production (Render, build from `1b729cb`), logged in as an agent.** A waiting ticket and a closed one to "In progress": the waiting one moved, the closed one was refused with "Cannot change status from \"Closed\" to \"In progress\"." and a link by subject, and the selection was cleared. The waiting ticket was then moved back to "Waiting for customer" with the same bar, so the data is as it was.
+
 ---
 
 ## 11. Uploads and object storage
