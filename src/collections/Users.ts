@@ -1,10 +1,18 @@
 import type { CollectionConfig } from 'payload'
 
 import { isAdmin, isStaff } from '../lib/access'
+import { env, useSecureCookies } from '../lib/env'
 
 export const Users: CollectionConfig = {
   slug: 'users',
-  auth: true,
+  auth: {
+    cookies: {
+      // Payload leaves Secure off by default. Over https the session cookie must never
+      // travel on a plain http request.
+      secure: useSecureCookies(env.serverUrl()),
+      sameSite: 'Lax',
+    },
+  },
   admin: {
     useAsTitle: 'email',
     defaultColumns: ['email', 'name', 'roles'],

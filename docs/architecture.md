@@ -107,7 +107,7 @@ flowchart LR
 
 ### Render (free Node web service)
 - **Role:** Hosts the Next.js/Payload app, provides HTTPS and env-var secrets.
-- **Why now:** Native Node builds (`pnpm install && pnpm build`, start with `pnpm start`), automatic HTTPS, and a free tier. Free instances sleep after 15 minutes of inactivity, which is accepted for this task.
+- **Why now:** Native Node builds (`pnpm install --frozen-lockfile && pnpm build`, start with `pnpm start:prod`), a Blueprint (`render.yaml`) that keeps the service config in git, automatic HTTPS, and a free tier. Free instances sleep after 15 minutes of inactivity, which is accepted for this task.
 - **When to replace:** Cold starts hurt reviewers. Upgrade to a paid instance (about $7/mo) rather than changing platform.
 
 ### Vitest
@@ -317,6 +317,14 @@ Access by role:
 - **Verified against:** `@payloadcms/storage-s3` 3.93.0 (`S3ClientUploadHandler`, `generateSignedURL`), `@payloadcms/plugin-cloud-storage` (`initClientUploads`, `resolveSignedURLKey`), and Payload core (`clientUploadReceipt`, `formatErrors`). Checked in the admin in a browser and by unit tests on the wrapper.
 - **Revisit when:** Payload passes the original name through `clientUploads` itself, or expired `payload_kv` entries grow enough to need a cleanup.
 
+### ADR-024: Deploy on Render with migrations in the start command
+- **Context:** Free Render web services have no pre-deploy command. `payload migrate` prompts when the database holds a dev-mode push marker (batch -1). With no terminal it hangs, and a cancelled prompt exits with code 0, which would let `next start` run on an unmigrated schema. Payload also leaves the session cookie's `Secure` flag off by default, and an open `engines` range lets Render jump to a new Node major.
+- **Choice:** A Render Blueprint (`render.yaml`) in the Frankfurt region next to Neon. The build is `corepack enable && pnpm install --frozen-lockfile && pnpm build`. The start command is `pnpm start:prod`: `pnpm migrate` (Payload's adapter migrate behind a check that fails with exit code 1 on a dev-mode marker), then `next start`. `/healthz` is the health check and does not touch the database. Node is pinned with `.node-version` and `engines: ">=24.22.1 <25"`. `PAYLOAD_PUBLIC_SERVER_URL` must be a bare origin and https in production, and https turns on `Secure` session cookies. The R2 CORS rule is kept in code and applied with `pnpm r2:cors`.
+- **Why:** The server never serves a schema that was not migrated, and a bad database state fails fast with a clear message instead of hanging the deploy. Every service setting except secret values is reviewable in git.
+- **Tradeoff:** Each cold start runs the migration check, a few seconds. Migrations and the app share one free instance, so a long migration delays startup. Moving to a paid instance would allow a pre-deploy command. The seed and the CORS script run from a laptop, not from Render.
+- **Verified against:** Render docs (Node version precedence, pre-deploy availability, build resources), `@payloadcms/drizzle` 3.93.0 `migrate.js` (the prompt and `process.exit(0)`), and Payload's cookie defaults (`secure: false`). Locally: production build and start, `pnpm migrate` exiting 1 on the dev branch, plain `payload migrate` hanging without a terminal, `Secure` cookie on login, and a browser upload after the CORS change.
+- **Revisit when:** The service moves to a paid instance (use the pre-deploy command), or a second instance is added (migrations must then run once, not per instance).
+
 ## Cost Estimate
 
 - **Monthly now:** $0 (Render free, Neon free, R2 free tier, Groq free tier when added)
@@ -344,7 +352,7 @@ Access by role:
 - DO NOT put business rules in React components or route handlers. Status transitions and validation MUST live in collection hooks or pure functions in `src/lib/` that hooks call.
 - Role restrictions MUST be enforced in collection `access` functions. A hidden button or hidden collection is not a restriction on its own.
 - The bulk status endpoint and the AI endpoint MUST check the caller's role on the server, not only in the component.
-- Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run `payload migrate`. DO NOT use `push` in production.
+- Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run migrations with `pnpm migrate` before the server starts (`pnpm start:prod`). It wraps Payload's migrate and MUST fail on a dev-mode push. DO NOT use `push` in production, and DO NOT run `pnpm dev` against the production database.
 - Every upload MUST be validated on the server: MIME allowlist on the `media` collection, 5 MB size limit, a file signature (magic bytes) that matches the MIME type, and an extension that matches the MIME type. Browsers upload straight to R2 through `clientUploads` (staff only), and the server MUST create the `media` document only with a receipt it signed (ADR-022). Storage keys are a random UUID folder plus the sanitized client file name. The original name goes to `originalName`.
 - The AI endpoint MUST send only field metadata (label, admin.description, select options) and the user's question to the model. DO NOT send database records or other users' data.
 - The AI endpoint MUST cap user input at 500 characters and MUST return a friendly error on timeout or API failure. DO NOT let an AI failure break the admin.
@@ -366,6 +374,7 @@ Access by role:
 | 2026-11-10 | Domain chosen: Support Ticket Tracker | Replaced the Book Lending example in Data Model with tickets, customers, tags, comments, media, and users. Added role access matrix. Appended ADR-017 with status transitions and name mapping. Added Don't Use Now entry for SLA and notifications. Added transition rules to Agent Rules. |
 | 2026-11-10 | Direct uploads to R2 | Browsers upload through Payload `clientUploads` with signed URLs (ADR-022). Storage keys are now `<uuid folder>/<client name>`, which replaces the UUID file-name rule in ADR-020 and ADR-021. Magic-byte and extension checks added, resolving the ADR-020 limitation. Updated Data Model, Use Now (R2), Cost Traps, and Agent Rules. |
 | 2026-11-10 | Upload fixes after a browser check | ADR-022 Why restated: direct uploads keep file bytes off the web service. Added ADR-023: the uploader's file name is kept for direct uploads through the key-value store. Upload rejections now return the reason as the top-level error message, so the admin shows it. Agent Rules: every code change MUST ship with Vitest tests. |
+| 2026-11-10 | Deploy to Render | Added ADR-024: Render Blueprint, migrations in the start command behind a dev-push guard, `/healthz`, pinned Node, https-only server origin with `Secure` cookies, R2 CORS from code. Updated Render in Use Now and the migration agent rule. |
 
 ---
 To update, run `/planfirst` again.
