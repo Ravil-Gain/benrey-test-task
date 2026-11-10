@@ -6,3 +6,4 @@ node_modules
 coverage
 *.tsbuildinfo
 next-env.d.ts
+.claude/launch.json

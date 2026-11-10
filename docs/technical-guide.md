@@ -587,7 +587,7 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `rememberOriginalNames.test.ts` | The signed-URL wrapper with a fake plugin handler and a fake key-value store: the name is stored under the signed folder, the body is read once and handed on, the response stays readable, nothing is stored on a refused request or without a name or folder, a store failure does not fail the upload, and startup fails without the plugin endpoint |
 | `originalName.test.ts` | Original-name cleaning (characters the key loses are kept, client paths and control characters removed, length cap, empty input), the store key, and reading a stored name back (fresh, expired, malformed) |
 
-None of them needs a database or R2, so the whole suite runs in under a second (most of it is importing Payload for the hook tests).
+None of them needs a database or R2, so the whole suite runs in under a second (most of it is importing Payload for the hook tests). Every code change ships with tests in the same commit (Agent Rules in `CLAUDE.md`). A part that cannot be tested this way is listed in section 14.2.
 
 ### 14.2 What is not tested yet
 

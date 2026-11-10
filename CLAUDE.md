@@ -36,4 +36,5 @@ Full spec: `./docs/architecture.md` — read before adding any infrastructure.
 - Ticket status transitions MUST be defined only in `src/lib/ticketStatus.ts`. The `tickets` hook and the bulk status endpoint MUST both call that module. DO NOT duplicate the transition map anywhere else.
 - The bulk status endpoint MUST apply the same transition and guard checks per ticket, and MUST report invalid transitions instead of failing the whole batch.
 - Every status transition and validation rule MUST have a Vitest test.
+- Every code change MUST ship with Vitest tests in the same commit: new or changed logic in `src/lib/`, hooks, endpoints, and plugins. A bug fix MUST add a test that fails without the fix. Logic that needs a real database or R2 MUST be split into a pure function or tested with fakes. Any part that still cannot be tested MUST be listed in `docs/technical-guide.md` section 14.2.
 <!-- planfirst:end -->

@@ -352,6 +352,7 @@ Access by role:
 - Ticket status transitions MUST be defined only in `src/lib/ticketStatus.ts`. The `tickets` hook and the bulk status endpoint MUST both call that module. DO NOT duplicate the transition map anywhere else.
 - The bulk status endpoint MUST apply the same transition and guard checks per ticket, and MUST report invalid transitions instead of failing the whole batch.
 - Every status transition and validation rule MUST have a Vitest test.
+- Every code change MUST ship with Vitest tests in the same commit: new or changed logic in `src/lib/`, hooks, endpoints, and plugins. A bug fix MUST add a test that fails without the fix. Logic that needs a real database or R2 MUST be split into a pure function or tested with fakes. Any part that still cannot be tested MUST be listed in `docs/technical-guide.md` section 14.2.
 
 ## Changelog
 
@@ -364,7 +365,7 @@ Access by role:
 | 2026-11-10 | Open decisions resolved before scaffolding | Node 24 LTS (was 22). Neon dev branch for local DB. Per-milestone local commits, push at end. AI chat in scope, OAuth deferred. Ticket number field dropped. dueAt rule and seed rules fixed. Added ADR-018. |
 | 2026-11-10 | Domain chosen: Support Ticket Tracker | Replaced the Book Lending example in Data Model with tickets, customers, tags, comments, media, and users. Added role access matrix. Appended ADR-017 with status transitions and name mapping. Added Don't Use Now entry for SLA and notifications. Added transition rules to Agent Rules. |
 | 2026-11-10 | Direct uploads to R2 | Browsers upload through Payload `clientUploads` with signed URLs (ADR-022). Storage keys are now `<uuid folder>/<client name>`, which replaces the UUID file-name rule in ADR-020 and ADR-021. Magic-byte and extension checks added, resolving the ADR-020 limitation. Updated Data Model, Use Now (R2), Cost Traps, and Agent Rules. |
-| 2026-11-10 | Upload fixes after a browser check | ADR-022 Why restated: direct uploads keep file bytes off the web service. Added ADR-023: the uploader's file name is kept for direct uploads through the key-value store. Upload rejections now return the reason as the top-level error message, so the admin shows it. |
+| 2026-11-10 | Upload fixes after a browser check | ADR-022 Why restated: direct uploads keep file bytes off the web service. Added ADR-023: the uploader's file name is kept for direct uploads through the key-value store. Upload rejections now return the reason as the top-level error message, so the admin shows it. Agent Rules: every code change MUST ship with Vitest tests. |
 
 ---
 To update, run `/planfirst` again.
