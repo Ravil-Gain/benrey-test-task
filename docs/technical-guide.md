@@ -374,7 +374,22 @@ A user can hold both roles. Access checks use `hasRole`, which accepts any shape
 
 A hidden button or hidden section is not a restriction on its own. Every restriction above is an access function, so it holds even if someone calls the API directly.
 
-### 9.4 What is not covered
+### 9.4 What an agent sees (checked on production)
+
+Logged in as a seeded agent on Render, 2026-11-11:
+
+| Place | What the agent sees |
+|---|---|
+| Sidebar | Customers, Tags, Tickets, Media. No Users. `/admin/collections/users` is a 404 |
+| Tickets and Customers lists | Selecting rows offers "Edit" and the bulk status bar. No bulk "Delete" |
+| Ticket edit view | No delete action |
+| Media edit view | No "Save", so the fields cannot change. "Duplicate" is offered, because creating media is allowed. "Edit Image" opens, but its result cannot be saved |
+| Tag edit view | No "Save" and no delete. Tags are read-only for agents |
+| API, the same calls an admin makes | Create user, promote itself, delete a ticket, change media: 403 each |
+
+Payload hides these controls from the access results, so the admin shows the same limits that the access functions enforce.
+
+### 9.5 What is not covered
 
 - Row-level rules (for example, "an agent sees only tickets assigned to them"). Not implemented. The access functions are at collection level.
 - Customers have no login, so there is no customer role.
@@ -734,7 +749,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 1. Apply migrations and seed the Neon dev branch. Done: the default 2,000-ticket seed took about 4 minutes.
 2. Deploy to Render: Blueprint, migrations at start, health check, R2 CORS, `Secure` cookies. Done: live at https://benrey-support-tickets.onrender.com, smoke test in [section 18.5](#185-first-deploy-results).
 3. Admin UI: bulk status action on the tickets list. Done ([section 10.1](#101-the-bulk-status-bar-in-the-admin)).
-4. Agent view of the admin: check that an agent sees a visibly restricted admin, and check list filters and search at 2,000 tickets in the browser.
+4. Agent view of the admin and list filters at 2,000 tickets. Done ([section 9.4](#94-what-an-agent-sees-checked-on-production), [section 18.5](#185-first-deploy-results)).
 5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions.
 6. Integration tests for access rules and the bulk endpoint.
 7. Login rate limiting and security headers: HSTS, CSP, frame options, and removing `X-Powered-By`. None of them is sent on Render yet.
@@ -822,6 +837,23 @@ Deployed on 2026-11-11 from `587955b`. Checked against the live URL:
 | Admin upload of a text file named `.png` | Refused with "File content does not match its type.", its R2 folder is empty |
 | Agent: admin UI | Sidebar shows Customers, Tags, Tickets, Media. No Users entry, and `/admin/collections/users` is a 404. The ticket edit view has no delete button |
 | Agent: API | Reads tickets and users (needed for the assignee field). Creating a user, promoting itself to admin, deleting a ticket, and changing media all answer 403. Its roles stay `["agent"]` |
+
+**Admin list pages at 2,000 tickets** (full admin page render, measured from a browser in the EU, logged in as an agent):
+
+| List view | Matches | Time |
+|---|---|---|
+| Tickets, default 10 per page | 2,000 | 0.56 s |
+| Tickets, 100 per page | 2,000 | 0.80 s |
+| Last page (200) | 2,000 | 0.37 s |
+| Search "login" | 122 | 0.48 s |
+| Filter status = resolved | 387 | 0.60 s |
+| Filter priority = urgent and status = new | 37 | 1.29 s |
+| Filter on the customer relation (company like "Orchid") | 215 | API |
+| Filter on tags (many-to-many) exists | 1,498 | 0.49 s |
+| Sort by due date, by priority | 2,000 | 0.42 s, 0.31 s |
+| Customers, search "an" (name, email, company) | 531 | 0.30 s |
+
+Ticket search covers the subject only (`listSearchableFields: ['subject']`). Finding tickets by customer goes through the Filters panel on the customer relation.
 
 **Found during the deploy.** Payload's first-user registration skipped access checks, so the empty production database briefly accepted an admin sign-up from anyone. It was fixed in `587955b` before the seed. The users list above shows no account outside the seed. Before the fix the absence of an extra account was not proven: the `create-first-user` string in the admin HTML is a route name and not a sign of an empty table.
 
