@@ -13,6 +13,7 @@ Full spec: `./docs/architecture.md` — read before adding any infrastructure.
 - AI help chat (later): Groq free-tier open-weight model, synchronous, 10s timeout
 
 ### Agent Rules
+- Keep `docs/technical-guide.md` in sync with the code in the same commit. Any change to a config file, dependency, environment variable, collection, hook, endpoint, command, or seed behaviour must update the matching section of that guide.
 - DO NOT add Redis, BullMQ, Celery, or any task queue or background worker. The AI call is synchronous with a 10-second timeout.
 - DO NOT add a SQLite fallback or any other local database. Every environment MUST use PostgreSQL via DATABASE_URL.
 - DO NOT hardcode PAYLOAD_SECRET, DATABASE_URL, R2 credentials, or the AI API key. Read all of them from environment variables. Startup MUST fail if a required variable is missing in production.

@@ -35,6 +35,8 @@ export default buildConfig({
     pool: {
       connectionString: env.databaseUrl(),
     },
+    // Schema changes only happen through committed migrations, never by auto-sync.
+    push: false,
   }),
   plugins: [
     // Private R2 bucket. Files are read through Payload's access-controlled route.
