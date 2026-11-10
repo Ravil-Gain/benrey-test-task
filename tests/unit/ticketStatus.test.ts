@@ -23,7 +23,7 @@ describe('validateStatusChange', () => {
 
   it('rejects transitions that skip the workflow', () => {
     const error = validateStatusChange({ from: 'new', to: 'resolved', hasAssignee: true })
-    expect(error).toContain('Cannot change status from "new" to "resolved"')
+    expect(error).toBe('Cannot change status from "New" to "Resolved".')
   })
 
   it('treats closed as terminal', () => {
@@ -33,7 +33,7 @@ describe('validateStatusChange', () => {
 
   it('requires an assignee before moving to in_progress', () => {
     const error = validateStatusChange({ from: 'new', to: 'in_progress', hasAssignee: false })
-    expect(error).toContain('Assign an agent')
+    expect(error).toBe('Assign an agent before moving the ticket to "In progress".')
   })
 
   it('does not require an assignee for other targets', () => {

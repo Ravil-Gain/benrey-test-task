@@ -50,6 +50,7 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   │   │   └── layout.tsx
 │   │   └── (frontend)/          Root URL (redirects to /admin) and /healthz for Render
 │   ├── collections/             One file per collection: fields, access, admin options
+│   ├── components/              Custom admin components (bulk status bar on the tickets list)
 │   ├── endpoints/               Custom REST endpoints (bulk status)
 │   ├── hooks/                   Collection hooks (business rules that run on every write)
 │   ├── lib/                     Pure logic with no Payload import: workflow, due dates, roles, env
@@ -394,7 +395,7 @@ Route: `POST /api/tickets/bulk-status`. Defined in `src/collections/Tickets.ts` 
 **Response** (HTTP 200 even when some tickets fail, because the request itself was valid)
 
 ```json
-{ "updated": 2, "failed": [{ "id": 15, "error": "Cannot change status from \"new\" to \"closed\"." }] }
+{ "updated": 2, "failed": [{ "id": 15, "error": "Cannot change status from \"Closed\" to \"New\"." }] }
 ```
 
 **Status codes**
@@ -413,7 +414,22 @@ Route: `POST /api/tickets/bulk-status`. Defined in `src/collections/Tickets.ts` 
 3. For each id, calls `payload.update` with `overrideAccess: false` and the caller's `req`. This means the normal access rules and the `beforeChange` workflow hook run for each ticket. The endpoint does not duplicate the rules.
 4. Collects successes and failures. One invalid ticket does not stop the rest.
 
-The admin UI button for this endpoint is not built yet (see [section 17](#17-known-limitations-and-next-steps)).
+### 10.1 The bulk status bar in the admin
+
+`src/components/BulkStatusBar.tsx`, registered as `admin.components.beforeListTable` on `tickets` (see `importMap.js`). It is the only custom admin component so far.
+
+**What the user sees.** Select rows in the tickets list, and a bar appears above the table: "Change status of N selected tickets to [status] Apply". After a confirmation dialog the bar shows progress ("Updating 200 / 500…"), then a toast with the outcome. Tickets that did not move stay listed under the bar, grouped by reason, each linked to the ticket by its subject. The list reloads with the new statuses and the selection is cleared.
+
+**How it works.**
+
+1. **Collect ids.** For rows picked on the page, the ids come from Payload's selection. For "Select all (N)" across pages, Payload selects the query, not ids, so the bar asks the API for the ids of that query (`select[id]=true`, up to 501). Payload's query helper drops the list's search box, so `searchFilter` in `src/lib/bulkStatusBatches.ts` adds the same `subject like` filter back. More than 500 matching tickets are refused with a hint to narrow the list.
+2. **Send in batches of 100** to `POST /api/tickets/bulk-status`. Batches show progress, and no single request runs long on the free instance (500 tickets is five requests).
+3. **Merge the results.** A batch the server refused as a whole (network error, 401, 403) counts as failed for each of its tickets, so the summary accounts for every one.
+4. **Show failures.** The subjects of failed tickets are loaded in one request. The last result is kept outside the component, because the list re-mounts it when it reloads.
+
+**What it does not do.** It holds no workflow rules. It does not hide target statuses a ticket cannot reach: the endpoint runs `src/lib/ticketStatus.ts` for every ticket and reports the refusals, which the bar displays. Agents and admins both see it, because both may change statuses. A user without a staff role never reaches the admin.
+
+**Checked in the admin (dev server).** Three tickets to "In progress": the waiting one moved, the one without an assignee and the closed one stayed, with their reasons. "Select all" with the search "SSO" across 2-row pages: the id query carried `subject like SSO`, 4 of 5 moved to Closed, the in-progress one was refused, and no ticket outside the search changed.
 
 ---
 
@@ -628,6 +644,8 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `r2Cors.test.ts` | The CORS rule: origin parsing, no `*`, no paths, duplicates removed, only `PUT` and the three signed headers |
 | `healthz.test.ts` | `/healthz` answers 200 with `no-store` and is never prerendered |
 | `usersHook.test.ts` | Who may create a user: admin over any API, the seed over the local API, nobody else. The users hook refuses the public first-user registration and agents, and leaves other operations to the access functions |
+| `bulkStatusEndpoint.test.ts` | The bulk endpoint with a fake request: 401 and 403, every 400 case including the 500 limit, each ticket updated with `overrideAccess: false` and the caller's `req`, refused transitions reported per ticket while the rest update, and other errors reported as "Update failed" without details |
+| `bulkStatusBatches.test.ts` | The bulk bar's plumbing: id cleanup, batches of 100 (500 becomes five requests), reading the endpoint response including whole-batch failures, merging, the toast summary, grouping failures by reason, and the search filter for "select all" |
 | `mediaHooks.test.ts` | The `media` hooks with a fake request (Map-backed key-value store, logger) and a mocked `deleteFolder`: which operations are checked, each rejection reason as the 400 message with `path: "filename"`, the size read from the temp file and not the declared size, R2 folder cleanup with and without a prefix, a failed cleanup still returning the validation error, the stored name taken and deleted (also on rejection and when expired), fallbacks when nothing is stored or the store fails, and `originalName` set only on create |
 | `rememberOriginalNames.test.ts` | The signed-URL wrapper with a fake plugin handler and a fake key-value store: the name is stored under the signed folder, the body is read once and handed on, the response stays readable, nothing is stored on a refused request or without a name or folder, a store failure does not fail the upload, and startup fails without the plugin endpoint |
 | `originalName.test.ts` | Original-name cleaning (characters the key loses are kept, client paths and control characters removed, length cap, empty input), the store key, and reading a stored name back (fresh, expired, malformed) |
@@ -638,10 +656,9 @@ None of them needs a database or R2, so the whole suite runs in under a second (
 
 - **Hooks against a real database**: the `beforeTicketChange` hook (timestamps, comment authorship) and the transition enforcement on real writes.
 - **Access rules end to end**: the agent gets 403 on delete, the admin gets 200.
-- **Bulk endpoint**: partial failures, 400 and 401 and 403 responses.
 - **Deploy scripts against real services**: `pnpm migrate` (the table check and the adapter call) and `pnpm r2:cors` (the S3 calls). The rules they use are unit tested. Both were run by hand: `pnpm migrate` stopped with exit code 1 on the dev branch's marker row, and `pnpm r2:cors` set the rule that the browser upload then passed.
 - **Uploads against real services**: the `media` hooks and the signed-URL wrapper are unit tested with fakes (section 14.1). Not covered by tests: `deleteFolder` against R2 (listing and batch delete), the real `payload_kv` table, and Payload passing the receipt and temp file to the hook. These are checked by a live script that is not in the repo and by hand in the admin.
-- **Admin UI**: login, list filters, inline comments.
+- **Admin UI**: login, list filters, inline comments, and the bulk status bar component (its rules are unit tested, the clicks were checked by hand in section 10.1).
 - **Roles through the API**: an agent gets 403 on delete, a no-role user cannot log in to the admin, and the CSRF origin check rejects foreign origins.
 
 Planned: integration tests with Vitest against a Neon test branch, and a few Playwright end-to-end tests for the admin. Both are listed in [section 17](#17-known-limitations-and-next-steps).
@@ -714,7 +731,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 1. Apply migrations and seed the Neon dev branch. Done: the default 2,000-ticket seed took about 4 minutes.
 2. Deploy to Render: Blueprint, migrations at start, health check, R2 CORS, `Secure` cookies. Done: live at https://benrey-support-tickets.onrender.com, smoke test in [section 18.5](#185-first-deploy-results).
-3. Admin UI: bulk status action on the tickets list (custom component that calls the endpoint).
+3. Admin UI: bulk status action on the tickets list. Done ([section 10.1](#101-the-bulk-status-bar-in-the-admin)).
 4. Agent view of the admin: check that an agent sees a visibly restricted admin, and check list filters and search at 2,000 tickets in the browser.
 5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions.
 6. Integration tests for access rules and the bulk endpoint.

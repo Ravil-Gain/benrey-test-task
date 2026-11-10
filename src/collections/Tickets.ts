@@ -2,17 +2,9 @@ import type { CollectionConfig } from 'payload'
 
 import { isAdmin, isStaff } from '../lib/access'
 import { isOverdue, TICKET_PRIORITIES } from '../lib/dueDate'
-import { TICKET_STATUSES, type TicketStatus } from '../lib/ticketStatus'
+import { TICKET_STATUS_LABELS, TICKET_STATUSES, type TicketStatus } from '../lib/ticketStatus'
 import { beforeTicketChange } from '../hooks/tickets'
 import { bulkStatus } from '../endpoints/bulkStatus'
-
-const STATUS_LABELS: Record<TicketStatus, string> = {
-  new: 'New',
-  in_progress: 'In progress',
-  waiting_customer: 'Waiting for customer',
-  resolved: 'Resolved',
-  closed: 'Closed',
-}
 
 // Dates the server fills in. They show in the sidebar but nobody types them.
 const serverDate = {
@@ -27,6 +19,10 @@ export const Tickets: CollectionConfig = {
     useAsTitle: 'subject',
     defaultColumns: ['subject', 'status', 'priority', 'assignee', 'dueAt'],
     listSearchableFields: ['subject'],
+    components: {
+      // Bulk status change for the selected rows. It calls the bulk-status endpoint below.
+      beforeListTable: ['/components/BulkStatusBar#BulkStatusBar'],
+    },
   },
   access: {
     read: isStaff,
@@ -61,7 +57,7 @@ export const Tickets: CollectionConfig = {
       type: 'select',
       required: true,
       defaultValue: 'new',
-      options: TICKET_STATUSES.map((value) => ({ label: STATUS_LABELS[value], value })),
+      options: TICKET_STATUSES.map((value) => ({ label: TICKET_STATUS_LABELS[value], value })),
       // The transition rules are checked in beforeTicketChange, not here.
       admin: { position: 'sidebar' },
     },

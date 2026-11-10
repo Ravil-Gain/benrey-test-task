@@ -377,6 +377,7 @@ Access by role:
 | 2026-11-10 | Upload fixes after a browser check | ADR-022 Why restated: direct uploads keep file bytes off the web service. Added ADR-023: the uploader's file name is kept for direct uploads through the key-value store. Upload rejections now return the reason as the top-level error message, so the admin shows it. Agent Rules: every code change MUST ship with Vitest tests. |
 | 2026-11-10 | Deploy to Render | Added ADR-024: Render Blueprint, migrations in the start command behind a dev-push guard, `/healthz`, pinned Node, https-only server origin with `Secure` cookies, R2 CORS from code. Updated Render in Use Now and the migration agent rule. |
 | 2026-11-11 | Close public first-user registration | Payload's first-register endpoint skips access checks, so an empty users table let anyone create an admin. A users `beforeOperation` hook now allows user creation only for admins and the local API (seed). `roles` gets field-level `create: isAdmin`. Found on the first Render deploy before seeding. |
+| 2026-11-11 | Bulk status bar in the admin | The first `admin.components` extension (ADR-010): a `beforeListTable` bar on tickets that sends selected ids to the bulk endpoint in batches of 100 and lists refused tickets by reason. Status error messages now use the status labels. No rule moved into the component. |
 
 ---
 To update, run `/planfirst` again.

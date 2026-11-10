@@ -2,9 +2,8 @@ import { ValidationError } from 'payload'
 import type { PayloadHandler } from 'payload'
 
 import { isStaff } from '../lib/access'
+import { MAX_BULK_SIZE } from '../lib/bulkStatusBatches'
 import { isTicketStatus } from '../lib/ticketStatus'
-
-export const MAX_BULK_SIZE = 500
 
 // POST /api/tickets/bulk-status  { ids: number[], status: TicketStatus }
 //
