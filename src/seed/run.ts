@@ -3,7 +3,7 @@ import type { Payload } from 'payload'
 
 import type { Ticket } from '../payload-types'
 import type { TicketPriority } from '../lib/dueDate'
-import type { TicketStatus } from '../lib/ticketStatus'
+import { INITIAL_STATUS, statusPath, type TicketStatus } from '../lib/ticketStatus'
 import { createRandom, type Random } from './random'
 import {
   AGENT_NAMES,
@@ -241,10 +241,22 @@ async function seedTickets(
     )
 
     await Promise.all(
-      batch.map(async ({ data, pastDueAt }) => {
+      batch.map(async ({ data, pastDueAt, laterStatuses }) => {
         const ticket = await withRetry(() =>
           payload.create({ collection: 'tickets', overrideAccess: true, data }),
         )
+        // Tickets go through the workflow like real ones: created at the first step from
+        // "New", then moved one allowed step at a time. The tickets hook checks every step.
+        for (const next of laterStatuses) {
+          await withRetry(() =>
+            payload.update({
+              collection: 'tickets',
+              id: ticket.id,
+              overrideAccess: true,
+              data: { status: next },
+            }),
+          )
+        }
         // The create hook sets dueAt from the priority. For some open tickets we move it
         // back into the past, so the overdue view has real examples to show.
         if (pastDueAt) {
@@ -294,12 +306,20 @@ function buildTicket(rng: Random, refs: Refs, index: number, now: number) {
       ? new Date(now - rng.int(1, 30) * DAY_MS).toISOString()
       : undefined
 
+  // The first move from "New" is allowed on create, the rest are updates.
+  const path = statusPath(INITIAL_STATUS, status)
+  if (!path) {
+    throw new Error(`Seed status "${status}" cannot be reached from "${INITIAL_STATUS}"`)
+  }
+  const [firstStatus = INITIAL_STATUS, ...laterStatuses] = path
+
   return {
     pastDueAt,
+    laterStatuses,
     data: {
       subject: `${rng.pick(SUBJECTS)} - ${company} #${index + 1}`,
       description: rng.next() < 0.3 ? richText(rng.pick(DESCRIPTIONS)) : undefined,
-      status,
+      status: firstStatus,
       priority,
       customer,
       assignee,

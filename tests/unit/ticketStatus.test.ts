@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { isTicketStatus, validateStatusChange } from '../../src/lib/ticketStatus'
+import {
+  INITIAL_STATUS,
+  TICKET_STATUSES,
+  isTicketStatus,
+  statusPath,
+  validateInitialStatus,
+  validateStatusChange,
+} from '../../src/lib/ticketStatus'
 
 describe('validateStatusChange', () => {
   it('allows the defined transitions', () => {
@@ -47,5 +54,72 @@ describe('isTicketStatus', () => {
     expect(isTicketStatus('archived')).toBe(false)
     expect(isTicketStatus(42)).toBe(false)
     expect(isTicketStatus(undefined)).toBe(false)
+  })
+})
+
+describe('validateInitialStatus', () => {
+  it('lets a ticket start as New, with or without an assignee', () => {
+    expect(INITIAL_STATUS).toBe('new')
+    expect(validateInitialStatus({ status: 'new', hasAssignee: false })).toBeNull()
+    expect(validateInitialStatus({ status: 'new', hasAssignee: true })).toBeNull()
+  })
+
+  it('lets a ticket start one allowed step from New', () => {
+    expect(validateInitialStatus({ status: 'in_progress', hasAssignee: true })).toBeNull()
+    expect(validateInitialStatus({ status: 'closed', hasAssignee: false })).toBeNull()
+  })
+
+  it('applies the assignee guard to a ticket that starts in progress', () => {
+    expect(validateInitialStatus({ status: 'in_progress', hasAssignee: false })).toBe(
+      'Assign an agent before moving the ticket to "In progress".',
+    )
+  })
+
+  it('refuses statuses that need work on the ticket first', () => {
+    expect(validateInitialStatus({ status: 'resolved', hasAssignee: true })).toBe(
+      'A new ticket cannot start as "Resolved". Create it as "New" and move it through the workflow.',
+    )
+    expect(validateInitialStatus({ status: 'waiting_customer', hasAssignee: true })).toMatch(
+      /cannot start as "Waiting for customer"/,
+    )
+  })
+})
+
+describe('statusPath', () => {
+  it('finds the shortest allowed path from New to every status', () => {
+    expect(statusPath('new', 'new')).toEqual([])
+    expect(statusPath('new', 'in_progress')).toEqual(['in_progress'])
+    expect(statusPath('new', 'closed')).toEqual(['closed'])
+    expect(statusPath('new', 'waiting_customer')).toEqual(['in_progress', 'waiting_customer'])
+    expect(statusPath('new', 'resolved')).toEqual(['in_progress', 'resolved'])
+  })
+
+  it('returns null when the target cannot be reached', () => {
+    expect(statusPath('closed', 'new')).toBeNull()
+    expect(statusPath('resolved', 'new')).toBeNull()
+  })
+
+  it('only ever takes allowed steps', () => {
+    for (const from of TICKET_STATUSES) {
+      for (const to of TICKET_STATUSES) {
+        const path = statusPath(from, to)
+        if (!path) continue
+        let current = from
+        for (const step of path) {
+          expect(validateStatusChange({ from: current, to: step, hasAssignee: true })).toBeNull()
+          current = step
+        }
+        expect(current).toBe(to)
+      }
+    }
+  })
+
+  it('reaches every status from New, so the seed can build any status', () => {
+    for (const status of TICKET_STATUSES) {
+      const path = statusPath(INITIAL_STATUS, status)
+      expect(path).not.toBeNull()
+      const first = path![0] ?? INITIAL_STATUS
+      expect(validateInitialStatus({ status: first, hasAssignee: true })).toBeNull()
+    }
   })
 })

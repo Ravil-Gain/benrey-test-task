@@ -52,3 +52,55 @@ export function validateStatusChange(input: {
   }
   return null
 }
+
+// Every ticket starts here. Creating a ticket counts as a move out of this status, so the
+// same map and the same assignee guard apply to creates as to updates.
+export const INITIAL_STATUS: TicketStatus = 'new'
+
+// Returns an error message if a new ticket may not start in `status`, or null if it may.
+// Allowed: "New", or a status reachable from "New" in one step ("In progress" with an
+// assignee, "Closed" for spam or a duplicate). "Waiting for customer" and "Resolved" need
+// work on the ticket first, so they are refused.
+export function validateInitialStatus(input: {
+  status: TicketStatus
+  hasAssignee: boolean
+}): string | null {
+  if (input.status === INITIAL_STATUS) {
+    return null
+  }
+  if (!NEXT_STATUSES[INITIAL_STATUS].includes(input.status)) {
+    const label = TICKET_STATUS_LABELS[input.status]
+    return `A new ticket cannot start as "${label}". Create it as "${TICKET_STATUS_LABELS[INITIAL_STATUS]}" and move it through the workflow.`
+  }
+  return validateStatusChange({ from: INITIAL_STATUS, to: input.status, hasAssignee: input.hasAssignee })
+}
+
+// The shortest list of allowed moves from `from` to `to`, not including `from`. Empty when
+// they are the same, null when `to` cannot be reached. The seed uses it to walk tickets
+// through the workflow instead of creating them in a status they could not start in.
+export function statusPath(from: TicketStatus, to: TicketStatus): TicketStatus[] | null {
+  if (from === to) {
+    return []
+  }
+  const previous = new Map<TicketStatus, TicketStatus>()
+  const queue: TicketStatus[] = [from]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    for (const next of NEXT_STATUSES[current]) {
+      if (next === from || previous.has(next)) {
+        continue
+      }
+      previous.set(next, current)
+      if (next === to) {
+        // Walk back from the target to the start, then drop the start.
+        const path: TicketStatus[] = []
+        for (let step: TicketStatus | undefined = to; step && step !== from; step = previous.get(step)) {
+          path.unshift(step)
+        }
+        return path
+      }
+      queue.push(next)
+    }
+  }
+  return null
+}

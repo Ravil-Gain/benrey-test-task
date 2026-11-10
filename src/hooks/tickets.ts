@@ -3,7 +3,12 @@ import type { CollectionBeforeChangeHook } from 'payload'
 
 import type { Ticket } from '../payload-types'
 import { computeDueAt, type TicketPriority } from '../lib/dueDate'
-import { validateStatusChange, type TicketStatus } from '../lib/ticketStatus'
+import {
+  INITIAL_STATUS,
+  validateInitialStatus,
+  validateStatusChange,
+  type TicketStatus,
+} from '../lib/ticketStatus'
 
 type CommentRow = NonNullable<Ticket['comments']>[number]
 
@@ -20,6 +25,18 @@ export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
   const status = data.status as TicketStatus | undefined
 
   if (operation === 'create') {
+    // A create is a move out of "New": the same map and assignee guard as an update.
+    const error = validateInitialStatus({
+      status: status ?? INITIAL_STATUS,
+      hasAssignee: Boolean(data.assignee),
+    })
+    if (error) {
+      throw new ValidationError({
+        collection: 'tickets',
+        errors: [{ message: error, path: 'status' }],
+        req,
+      })
+    }
     const priority = (data.priority ?? 'normal') as TicketPriority
     data.dueAt = computeDueAt(priority, now).toISOString()
   }
@@ -40,8 +57,8 @@ export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
     }
   }
 
-  // Stamp the time when a ticket enters resolved or closed. New tickets can start in
-  // either status, so create counts too.
+  // Stamp the time when a ticket enters resolved or closed. A new ticket can start as
+  // closed (spam, duplicate), so create counts too.
   const enteredStatus = operation === 'create' || (status && status !== originalDoc?.status)
   if (enteredStatus && status === 'resolved') {
     data.resolvedAt = nowIso

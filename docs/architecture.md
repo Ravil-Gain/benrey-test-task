@@ -340,6 +340,7 @@ Access by role:
 
 ## Agent Rules
 
+- Keep `docs/technical-guide.md` in sync with the code in the same commit. Any change to a config file, dependency, environment variable, collection, hook, endpoint, command, or seed behaviour must update the matching section of that guide.
 - DO NOT add Redis, BullMQ, Celery, or any task queue or background worker. The AI call is synchronous with a 10-second timeout.
 - DO NOT add a SQLite fallback or any other local database. Every environment MUST use PostgreSQL via `DATABASE_URL`.
 - DO NOT hardcode `PAYLOAD_SECRET`, `DATABASE_URL`, R2 credentials, or the AI API key. Read all of them from environment variables. Startup MUST fail if a required variable is missing in production.
@@ -350,9 +351,11 @@ Access by role:
 - DO NOT build a separate Express, Nest, or Fastify API. Use Payload's REST and local API, and Next.js route handlers only for custom endpoints.
 - DO NOT build a separate SPA or a second admin UI. Extend the Payload admin only through `admin.components`.
 - DO NOT put business rules in React components or route handlers. Status transitions and validation MUST live in collection hooks or pure functions in `src/lib/` that hooks call.
+- New users MUST NOT get a default role. Roles are assigned only by admins, and admin panel access requires a staff role.
 - Role restrictions MUST be enforced in collection `access` functions. A hidden button or hidden collection is not a restriction on its own.
 - Users MUST be created only by an admin or by server code through the local API (the seed). This MUST be enforced in a `users` hook, because Payload's first-user registration skips `access`. The first admin MUST come from `pnpm seed`, run right after the first deploy.
 - The bulk status endpoint and the AI endpoint MUST check the caller's role on the server, not only in the component.
+- `PAYLOAD_PUBLIC_SERVER_URL` MUST be set. It is the CSRF allowlist. DO NOT leave `csrf` empty.
 - Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run migrations with `pnpm migrate` before the server starts (`pnpm start:prod`). It wraps Payload's migrate and MUST fail on a dev-mode push. DO NOT use `push` in production, and DO NOT run `pnpm dev` against the production database.
 - Every upload MUST be validated on the server: MIME allowlist on the `media` collection, 5 MB size limit, a file signature (magic bytes) that matches the MIME type, and an extension that matches the MIME type. Browsers upload straight to R2 through `clientUploads` (staff only), and the server MUST create the `media` document only with a receipt it signed (ADR-022). Storage keys are a random UUID folder plus the sanitized client file name. The original name goes to `originalName`.
 - The AI endpoint MUST send only field metadata (label, admin.description, select options) and the user's question to the model. DO NOT send database records or other users' data.
@@ -378,6 +381,8 @@ Access by role:
 | 2026-11-10 | Deploy to Render | Added ADR-024: Render Blueprint, migrations in the start command behind a dev-push guard, `/healthz`, pinned Node, https-only server origin with `Secure` cookies, R2 CORS from code. Updated Render in Use Now and the migration agent rule. |
 | 2026-11-11 | Close public first-user registration | Payload's first-register endpoint skips access checks, so an empty users table let anyone create an admin. A users `beforeOperation` hook now allows user creation only for admins and the local API (seed). `roles` gets field-level `create: isAdmin`. Found on the first Render deploy before seeding. |
 | 2026-11-11 | Bulk status bar in the admin | The first `admin.components` extension (ADR-010): a `beforeListTable` bar on tickets that sends selected ids to the bulk endpoint in batches of 100 and lists refused tickets by reason. Status error messages now use the status labels. No rule moved into the component. |
+| 2026-11-11 | Workflow applies to new tickets | Creating a ticket now counts as a move out of `new`: only `new`, `in_progress` with an assignee, or `closed` are accepted. Before, the checks ran on updates only. The seed walks each ticket through the workflow with `statusPath` instead of creating it in its final status. |
+| 2026-11-11 | Docs review | Agent Rules synced with CLAUDE.md: added the technical-guide sync rule, the no-default-role rule, and the CSRF allowlist rule, which were only in CLAUDE.md. |
 
 ---
 To update, run `/planfirst` again.

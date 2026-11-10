@@ -31,7 +31,7 @@ Contents:
 
 A support team uses an admin panel to track customer tickets. Staff (admins and agents) create tickets for customers, assign them to agents, move them through a status workflow, add comments with attachments, tag them, and bulk-update their status. Admins also manage staff accounts and tags. Agents cannot delete records or manage users.
 
-The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeScript collection configs, so the admin is the framework's own tooling and not a hand-built UI. Custom code covers only the business rules, the access rules, the upload checks, and the bulk endpoint.
+The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeScript collection configs, so the admin is the framework's own tooling and not a hand-built UI. Custom code covers only the business rules, the access rules, the upload checks, the bulk status endpoint with its admin bar (the one custom admin component), and the deploy scripts (migrations before start, R2 CORS).
 
 ---
 
@@ -52,8 +52,8 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   ├── collections/             One file per collection: fields, access, admin options
 │   ├── components/              Custom admin components (bulk status bar on the tickets list)
 │   ├── endpoints/               Custom REST endpoints (bulk status)
-│   ├── hooks/                   Collection hooks (business rules that run on every write)
-│   ├── lib/                     Pure logic with no Payload import: workflow, due dates, roles, env
+│   ├── hooks/                   Collection hooks that run on every write: ticket workflow, media checks, user creation guard
+│   ├── lib/                     Pure logic with no Payload import: workflow, due dates, roles, env, upload rules, bulk batching, CORS rule, migration guard
 │   ├── migrations/              Committed database migrations (generated, never hand-edited)
 │   ├── plugins/                 Small config plugins (keeps the uploader's file name on direct uploads)
 │   ├── scripts/                 One-off operations: migrate before start, set R2 CORS
@@ -84,7 +84,7 @@ The split between `lib/` and everything else is deliberate. `lib/` holds the rul
 | Web framework | Next.js (App Router) | 16.4.2 | Payload 3 runs inside Next.js. Payload's admin is a Next.js app, so there is no second server to run. |
 | UI runtime | React | 19.3.1 | Required by Next.js and Payload admin. |
 | Language | TypeScript, strict mode | 6.0.3 | Payload generates types from the collections, so the database shape and the code stay in sync. |
-| Node.js | 24 LTS | 24.22.2 or later | `create-payload-app` and Payload 3.x require `>=24.22.1`. Older Node versions fail the install with an engine warning. |
+| Node.js | 24 LTS | 24.22.2 (`.node-version`), range `>=24.22.1 <25` | `create-payload-app` and Payload 3.x require `>=24.22.1`. Older Node versions fail the install with an engine warning. The upper bound keeps Render on Node 24 (section 4.1). |
 | Package manager | pnpm | 10.34.7 | Reproducible installs from a lockfile. Strict about phantom dependencies, which catches import mistakes early. |
 | Database | PostgreSQL on Neon | Postgres 18 (Neon) | Managed database, required by the brief. Free tier. Same engine locally (Neon dev branch) and in production. |
 | DB adapter | `@payloadcms/db-postgres` | 3.93.0 | Official Payload adapter. Uses Drizzle under the hood and generates reviewable SQL migrations. |
@@ -235,7 +235,7 @@ This file is the single source of runtime configuration. It is loaded by the adm
 | `db` | `postgresAdapter({ pool, push: false })` | PostgreSQL through the connection string. `pool.keepAlive: true` keeps idle TCP connections alive. `push: false` means schema changes happen only through committed migrations (see [section 12](#12-database-and-migrations)). |
 | `serverURL` | `env.serverUrl()` | The public origin of the app. Payload uses it for links and as the CSRF allowlist. |
 | `csrf` | `[serverURL]` | Origins allowed to send cookie-authenticated requests. Payload rejects a cookie request whose `Origin` is not listed. We set it explicitly because Payload's default is an empty list, which turns the origin check off (see section 16). |
-| `onInit` | attaches an `error` listener to `payload.db.pool` | Without a listener, an idle connection that fails in the background crashes the process. With it, the pool drops that connection and opens a new one on the next query. See [section 12.5](#125-connection-failures). |
+| `onInit` | attaches an `error` listener to `payload.db.pool` | Without a listener, an idle connection that fails in the background crashes the process. With it, the pool drops that connection and opens a new one on the next query. See [section 12.4](#124-connection-failures). |
 | `upload.limits.fileSize` | `MAX_UPLOAD_BYTES` (5 MB) | Global upload size limit. The storage plugin checks it when it signs a direct-upload URL, so an oversized file never gets a URL. |
 | `plugins` | `[s3Storage({...}), rememberOriginalNames]` | `s3Storage` stores the `media` collection's files in the R2 bucket. `clientUploads.access` limits direct-upload signing to staff (section 11.3). `rememberOriginalNames` (`src/plugins/`) wraps the signed-URL endpoint that `s3Storage` adds, so it must come after it. Startup fails if that endpoint is missing (section 11.3). |
 | `sharp` | `sharp` | Image processing for thumbnails. |
@@ -255,10 +255,10 @@ Source of truth: the collection files in `src/collections/`. Generated types: `s
 
 | Collection | Key fields | Relations | Notes |
 |---|---|---|---|
-| `users` | `email`, `password` (hashed), `name`, `roles` (`admin`, `agent`, multi-select, no default) | none | Auth collection. Passwords are hashed by Payload (PBKDF2-SHA256 with a salt), never stored in plain text. Only staff roles can open the admin panel (`access.admin`). |
+| `users` | `email`, `password` (hashed), `name`, `roles` (`admin`, `agent`, multi-select, no default) | none | Auth collection. Passwords are hashed by Payload (PBKDF2-SHA256 with a salt), never stored in plain text. Only staff roles can open the admin panel (`access.admin`). Only admins and the seed can create users, including through Payload's first-user registration (section 16). |
 | `customers` | `name`, `email` (unique), `company` | none | The people who open tickets. They are not login users. |
 | `tags` | `name` (unique, max 40), `color` (hex, validated) | none | Used for many-to-many labelling of tickets. |
-| `tickets` | `subject` (5–200 chars), `description` (rich text), `status`, `priority`, `dueAt`, `resolvedAt`, `closedAt`, `isOverdue` (virtual), `comments` (array) | FK to `customers` (required), FK to `users` as `assignee`, many-to-many to `tags` | Core collection. Status workflow and due dates are enforced in a hook. |
+| `tickets` | `subject` (5–200 chars), `description` (rich text), `status`, `priority`, `dueAt`, `resolvedAt`, `closedAt`, `isOverdue` (virtual), `comments` (array) | FK to `customers` (required), FK to `users` as `assignee`, many-to-many to `tags` | Core collection. Status workflow (including the status a ticket starts in) and due dates are enforced in a hook. |
 | `media` | `alt`, file stored in a random UUID folder under the uploader's file name, `originalName` (read-only, the name the uploader gave), generated `thumbnail` | none | Uploads. Stored in R2. Limits in [section 11](#11-uploads-and-object-storage). |
 
 ### 7.2 Ticket fields in detail
@@ -301,11 +301,12 @@ Defined in one place: `src/lib/ticketStatus.ts`. Used by the `tickets` hook (`sr
 Guards on top of the transitions:
 - Moving to `in_progress` requires an assignee. The check looks at the incoming `assignee` if the request sends one, and at the stored `assignee` otherwise. Clearing the assignee in the same request is handled.
 - Setting the status to its current value is a no-op and always allowed.
+- **Creating a ticket counts as a move out of `new`** (`validateInitialStatus`). A ticket can be created as `new`, or one allowed step from it: `in_progress` with an assignee, or `closed` (spam, a duplicate). Creating it as `waiting_customer` or `resolved` is refused with "A new ticket cannot start as …". Before this rule the checks ran on updates only, so a ticket could be created directly as `in_progress` without an assignee, or as `resolved`. Duplicating a resolved ticket in the admin is refused for the same reason: set the copy to New first.
 
 Timestamps:
 - Entering `resolved` sets `resolvedAt`.
 - Entering `closed` sets `closedAt`.
-- On create, if the ticket is created directly as `resolved` or `closed` (seed data does this), the matching timestamp is set too.
+- A ticket created as `closed` gets `closedAt` on create.
 
 ### 8.2 Why it is a hook
 
@@ -368,7 +369,8 @@ A user can hold both roles. Access checks use `hasRole`, which accepts any shape
 ### 9.3 How it is enforced
 
 - **Collection access functions**: each collection's `access` object calls `isAdmin` or `isStaff` (`src/lib/access.ts`). Payload runs these on every REST and local API call, not only in the admin UI.
-- **Field access**: `users.roles` has its own `access.update: isAdmin`, so changing roles is restricted even inside an otherwise allowed update.
+- **Field access**: `users.roles` has its own `access.create: isAdmin` and `access.update: isAdmin`, so setting roles is restricted even inside an otherwise allowed create or update.
+- **User creation guard**: Payload's first-user registration runs with `overrideAccess: true` and skips the access functions. The `users` `beforeOperation` hook (`src/hooks/users.ts`) refuses every create that is not from an admin or from the local API (the seed).
 - **Admin panel login**: `users.access.admin` allows only staff roles. A user with no roles can exist (for example, a future OAuth sign-up) but cannot open the admin until an admin assigns a role.
 - **Sidebar visibility**: `users` has `admin.hidden` that returns true for agents. This hides the section. It does not restrict access. The access functions do that.
 
@@ -566,7 +568,7 @@ Schema changes follow the same steps every time:
 
 **Recovering from the marker.** Run `pnpm payload migrate:status` and compare the tables with the committed migrations. If every migration is applied and the schema matches, delete the row (`DELETE FROM payload_migrations WHERE name = 'dev' AND batch = -1`) and run `pnpm migrate` again. If the schema has changes no migration covers, write a migration for them first.
 
-### 12.5 Connection failures
+### 12.4 Connection failures
 
 Neon is a remote database. Connections can time out, and an idle pooled connection can fail in the background.
 
@@ -577,7 +579,7 @@ Neon is a remote database. Connections can time out, and an idle pooled connecti
 
 The app itself does not retry requests. A failed request returns an error to the user, and the user retries.
 
-### 12.4 Reset behavior
+### 12.5 Reset behavior
 
 `pnpm seed --reset` does not drop tables. It deletes rows. Media is deleted through Payload so its R2 files are removed too. Everything else is deleted with the database-level `payload.db.deleteMany`, which skips per-document hooks and is much faster than deleting document by document. Table structure is untouched, so migrations stay valid.
 
@@ -593,7 +595,7 @@ pnpm seed --reset          # deletes all data first, then seeds again
 pnpm seed --tickets=500    # smaller run (default is 2000)
 ```
 
-Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, the R2 variables, and the three `SEED_*` variables in `.env`.
+Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, `PAYLOAD_PUBLIC_SERVER_URL`, the R2 variables, and the three `SEED_*` variables in `.env`. The seed loads the full Payload config, so it needs every variable the app needs. Seeding production is described in [section 18.3](#183-first-deploy-step-by-step).
 
 **Safety rules**
 - `--reset` refuses to run when `NODE_ENV=production`.
@@ -615,7 +617,7 @@ Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, the R2 variables, and the three 
 
 - **Deterministic.** A seeded pseudo-random generator (`src/seed/random.ts`, mulberry32) with a fixed seed. The same run produces the same data. A bug on seeded data is reproducible.
 - **Weighted.** Priorities: low 15, normal 50, high 25, urgent 10 (relative weights). Statuses: new 20, in progress 25, waiting for customer 15, resolved 20, closed 20.
-- **Consistent with the workflow.** Any status other than `new` gets an assignee. Creating a ticket directly in `resolved` or `closed` sets the matching timestamp.
+- **Through the workflow.** Any status other than `new` gets an assignee. Each ticket is created at the first step of the shortest allowed path from `new` (`statusPath` in `src/lib/ticketStatus.ts`), then moved one step at a time, so the tickets hook checks every step and sets the timestamps. `waiting_customer` and `resolved` tickets take one extra update (via `in_progress`).
 - **Some overdue tickets.** About 30% of open tickets get a due date between 1 and 30 days in the past, so the overdue state has real examples. This is done with one extra update per ticket after creation.
 - **Comments.** 0 to 5 per ticket. About 8% have an attachment.
 
@@ -652,7 +654,8 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 
 | File | Covers |
 |---|---|
-| `ticketStatus.test.ts` | Every allowed transition, a set of rejected transitions, the closed terminal state, the assignee guard, same-status no-op, status validation |
+| `ticketStatus.test.ts` | Every allowed transition, a set of rejected transitions, the closed terminal state, the assignee guard, same-status no-op, status validation, which statuses a new ticket may start in, and the shortest path between statuses (every step allowed, every status reachable from New) |
+| `ticketsHook.test.ts` | The tickets hook with a fake request: the create rule (start statuses, assignee guard, due date, `closedAt`), the update rule (allowed and refused steps, assignee being saved versus stored), and server-set comment author and time |
 | `dueDate.test.ts` | The four SLA windows, overdue before and after the due time, resolved and closed never overdue, missing due date, ISO string input |
 | `access.test.ts` | `hasRole` with valid and malformed users, `isAdmin`, `isStaff` for admin, agent, both, anonymous |
 | `uploadRules.test.ts` | Magic bytes for each allowed type, HTML sent as an image, a header that is too short, NUL bytes in text, extension match and mismatch, the 5 MB boundary, and the order of the checks |
@@ -671,7 +674,7 @@ None of them needs a database or R2, so the whole suite runs in under a second (
 
 ### 14.2 What is not tested yet
 
-- **Hooks against a real database**: the `beforeTicketChange` hook (timestamps, comment authorship) and the transition enforcement on real writes.
+- **Hooks against a real database**: the `beforeTicketChange` hook is unit tested with fakes (section 14.1). The create rule and the seed's path were also run once against real Payload on the dev branch. A full seed run with the new path was not repeated.
 - **Access rules end to end**: the agent gets 403 on delete, the admin gets 200.
 - **Deploy scripts against real services**: `pnpm migrate` (the table check and the adapter call) and `pnpm r2:cors` (the S3 calls). The rules they use are unit tested. Both were run by hand: `pnpm migrate` stopped with exit code 1 on the dev branch's marker row, and `pnpm r2:cors` set the rule that the browser upload then passed.
 - **Uploads against real services**: the `media` hooks and the signed-URL wrapper are unit tested with fakes (section 14.1). Not covered by tests: `deleteFolder` against R2 (listing and batch delete), the real `payload_kv` table, and Payload passing the receipt and temp file to the hook. These are checked by a live script that is not in the repo and by hand in the admin.
@@ -719,7 +722,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Remote URL fetch | Disabled (`pasteURL: false`). Prevents server-side request forgery. | In place |
 | File reads | Through the access-controlled route. The bucket is private. | In place |
 | Direct upload access | Only staff get a signed R2 upload URL. A document needs a receipt the server signed (section 11.3). | In place |
-| R2 CORS | `PUT` only, three headers only, from listed origins only. Set by `pnpm r2:cors` (section 11.3). | In place for dev; Render origin added at first deploy |
+| R2 CORS | `PUT` only, three headers only, from listed origins only. Set by `pnpm r2:cors` (section 11.3). | In place (dev and Render origins) |
 | HTTPS | Render terminates TLS and redirects http to https. The app refuses a non-https `PAYLOAD_PUBLIC_SERVER_URL` in production. | In place |
 | Debug output | `next start` runs with `NODE_ENV=production`. Payload returns generic messages for errors that are not public, without stack traces. There is no GraphQL route. | In place |
 | Default privileges | New accounts have no roles and no admin access. | In place |
