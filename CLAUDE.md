@@ -27,7 +27,7 @@ Full spec: `./docs/architecture.md` — read before adding any infrastructure.
 - Role restrictions MUST be enforced in collection `access` functions. A hidden button or hidden collection is not a restriction on its own.
 - The bulk status endpoint and the AI endpoint MUST check the caller's role on the server, not only in the component.
 - Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run `payload migrate`. DO NOT use `push` in production.
-- Every upload MUST be validated: MIME allowlist on the `media` collection, 5 MB size limit, and generated filenames (UUID plus the extension from the validated MIME type; the original name goes to `originalName`).
+- Every upload MUST be validated on the server: MIME allowlist on the `media` collection, 5 MB size limit, a file signature (magic bytes) that matches the MIME type, and an extension that matches the MIME type. Browsers upload straight to R2 through `clientUploads` (staff only), and the server MUST create the `media` document only with a receipt it signed. Storage keys are a random UUID folder plus the sanitized client file name. The original name goes to `originalName`.
 - New users MUST NOT get a default role. Roles are assigned only by admins, and admin panel access requires a staff role.
 - `PAYLOAD_PUBLIC_SERVER_URL` MUST be set. It is the CSRF allowlist. DO NOT leave `csrf` empty.
 - The AI endpoint MUST send only field metadata (label, admin.description, select options) and the user's question to the model. DO NOT send database records or other users' data.

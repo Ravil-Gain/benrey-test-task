@@ -117,6 +117,7 @@ Not used, and why: Redis and any task queue (no background work in scope), Docke
 - `next`, `react`, `react-dom` are pinned exactly for the same reason: Payload's admin depends on specific React and Next versions.
 - `dotenv` loads `.env` for the seed script. `tsx` does not read `.env` by itself, and Next.js reads it on its own.
 - `sharp` is a runtime dependency because Payload uses it for thumbnails.
+- `@aws-sdk/client-s3` is pinned to `3.1165.0`, the same version `@payloadcms/storage-s3` uses. Two copies would bloat the install. The app uses it directly only in `src/lib/r2.ts`, to delete the folder of a rejected direct upload.
 - Dev tooling (`typescript`, `vitest`, `tsx`, type packages) is in `devDependencies`.
 
 **`engines`** documents the minimum Node version. pnpm prints a warning when the installed Node is too old.
@@ -206,7 +207,8 @@ This file is the single source of runtime configuration. It is loaded by the adm
 | `serverURL` | `env.serverUrl()` | The public origin of the app. Payload uses it for links and as the CSRF allowlist. |
 | `csrf` | `[serverURL]` | Origins allowed to send cookie-authenticated requests. Payload rejects a cookie request whose `Origin` is not listed. We set it explicitly because Payload's default is an empty list, which turns the origin check off (see section 16). |
 | `onInit` | attaches an `error` listener to `payload.db.pool` | Without a listener, an idle connection that fails in the background crashes the process. With it, the pool drops that connection and opens a new one on the next query. See [section 12.5](#125-connection-failures). |
-| `plugins` | `[s3Storage({...})]` | Stores the `media` collection's files in the R2 bucket. |
+| `upload.limits.fileSize` | `MAX_UPLOAD_BYTES` (5 MB) | Global upload size limit. The storage plugin checks it when it signs a direct-upload URL, so an oversized file never gets a URL. |
+| `plugins` | `[s3Storage({...})]` | Stores the `media` collection's files in the R2 bucket. `clientUploads.access` limits direct-upload signing to staff (section 11.3). |
 | `sharp` | `sharp` | Image processing for thumbnails. |
 | `typescript.outputFile` | `src/payload-types.ts` | Where the generated types are written. |
 
@@ -228,7 +230,7 @@ Source of truth: the collection files in `src/collections/`. Generated types: `s
 | `customers` | `name`, `email` (unique), `company` | none | The people who open tickets. They are not login users. |
 | `tags` | `name` (unique, max 40), `color` (hex, validated) | none | Used for many-to-many labelling of tickets. |
 | `tickets` | `subject` (5–200 chars), `description` (rich text), `status`, `priority`, `dueAt`, `resolvedAt`, `closedAt`, `isOverdue` (virtual), `comments` (array) | FK to `customers` (required), FK to `users` as `assignee`, many-to-many to `tags` | Core collection. Status workflow and due dates are enforced in a hook. |
-| `media` | `alt`, file stored under a random UUID name, `originalName` (read-only, the name the uploader gave), generated `thumbnail` | none | Uploads. Stored in R2. Limits in [section 11](#11-uploads-and-object-storage). |
+| `media` | `alt`, file stored in a random UUID folder under the uploader's file name, `originalName` (read-only, the name the uploader gave), generated `thumbnail` | none | Uploads. Stored in R2. Limits in [section 11](#11-uploads-and-object-storage). |
 
 ### 7.2 Ticket fields in detail
 
@@ -392,9 +394,9 @@ The admin UI button for this endpoint is not built yet (see [section 17](#17-kno
 ### 11.1 Where files live
 
 - **Bucket:** a private Cloudflare R2 bucket. Nothing is public. Files are not served by bucket URL.
-- **Stored name:** a random UUID with an extension taken from the validated MIME type. The client's file name is never used for storage. It is kept in `originalName` for display.
+- **Stored name:** `<uuid>/<client file name>`. Each upload gets its own random UUID folder, so two files with the same name never collide. Payload sanitizes the client's file name before it becomes the key. The name as the uploader sent it is kept in `originalName` for display. This replaces the earlier UUID file-name rule (see ADR-022 in the architecture doc).
 - **Read path:** Payload's file route (`/api/media/file/<filename>`). It checks the `media` read access (staff only) before it streams the file. A logged-out visitor gets 403.
-- **Write path:** the `s3Storage` plugin uploads the file to R2 when the `media` document is created. Thumbnails are generated with sharp and uploaded too.
+- **Write path:** the browser uploads straight to R2 with a signed URL, then creates the `media` document (section 11.3). The server reads the object back from R2 once, to validate it and to generate thumbnails with sharp. Thumbnails are uploaded to R2 too. Payload skips a thumbnail when the image is smaller than 240×240 in both width and height.
 - **Delete path:** deleting a `media` document also removes its files from R2.
 
 Using R2 means uploads survive a redeploy. Render's disk is ephemeral and would lose files.
@@ -406,16 +408,48 @@ Defined in `src/collections/Media.ts`.
 | Rule | Where | Value |
 |---|---|---|
 | Allowed MIME types | `beforeOperation` hook (server) | `image/jpeg`, `image/png`, `image/webp`, `application/pdf`, `text/plain` |
-| Maximum size | `beforeOperation` hook (server) | 5 MB (`MAX_UPLOAD_BYTES`) |
-| Stored file name | `beforeOperation` hook (server) | `<uuid>` plus the extension for the validated MIME type (`.jpg`, `.png`, `.webp`, `.pdf`, `.txt`) |
+| Maximum size | `upload.limits.fileSize` (signed URL) and `beforeOperation` hook (server) | 5 MB (`MAX_UPLOAD_BYTES`). A declared size over the limit gets no URL. |
+| Extension | `beforeOperation` hook (server) | Must match the MIME type (`.jpg` or `.jpeg`, `.png`, `.webp`, `.pdf`, `.txt`), case-insensitive |
+| File signature | `beforeOperation` hook (server) | Magic bytes must match the MIME type. JPEG, PNG, WebP, and PDF have fixed signatures. Plain text must not contain NUL bytes. |
+| Stored file name | Payload (plugin and file data) | `<uuid>/<sanitized client file name>`. See section 11.1. |
 | Remote URL fetch | `upload.pasteURL: false` | Disabled. The server never downloads a file from a URL the client sends. |
-| Generated thumbnails | `upload.imageSizes` | 240×240 centre crop for images |
+| Direct upload access | `clientUploads.access` | Staff only. Other users get no signed URL (403). |
+| Generated thumbnails | `upload.imageSizes` | 240×240 centre crop for images. Skipped for images smaller than 240×240 in both dimensions. |
 
 **Why the check is in a hook.** The `mimeTypes` option in Payload only filters the file picker in the browser. A request sent without the browser would skip it. The hook runs on the server for every create and update.
 
-**Limitation.** The MIME type comes from the upload's `Content-Type`, which the client controls. A file named `.png` with HTML inside would pass the MIME check. The fix is to read the file's first bytes ("magic bytes") and compare them with the claimed type. It is not implemented yet. Because files are never served inline from a public URL (they go through the access-controlled route), the risk is limited, but this is the first thing to add with more time.
+**Remaining limit.** The signature check reads only the first 16 bytes. A file with a valid PNG header followed by other content still passes. Plain text is the weakest type: any text passes unless it contains a NUL byte. Files are never served inline from a public URL (they go through the access-controlled route), so the risk stays limited. Re-encoding images would close the gap completely. It is not done.
 
-### 11.3 Attachments on comments
+### 11.3 Direct upload flow
+
+The browser uploads straight to R2, so the file's bytes do not pass through the Render web service on the way in. This uses Payload's `clientUploads` option in `@payloadcms/storage-s3`.
+
+1. The admin asks for a signed URL: `POST /api/storage-s3-generate-signed-url` with the collection, file name, MIME type, and size. Only staff get one. A size over 5 MB gets no URL.
+2. The signed PUT URL expires after 600 seconds. It fixes the `Content-Type` and `Content-Length` headers, and R2 rejects a PUT whose headers differ.
+3. The browser PUTs the file to R2 with those headers.
+4. The browser creates the `media` document with a receipt the server signed (`clientUploadContext`). `requiresClientUploadReceipt: true` on `media` refuses a document without one.
+5. Payload reads the object from R2 into a temp file, and the `beforeOperation` hook runs the checks in section 11.2. A failed check deletes the upload folder from R2 and returns 400.
+6. On success, thumbnails are created and uploaded, and the document is saved.
+
+**Why the server still reads the file.** The signed URL checks only the size and headers. It cannot see what the bytes are, so the server reads the file once after the upload. This is the trade-off recorded in ADR-022.
+
+**R2 CORS.** The browser can PUT to R2 only if the bucket allows the app's origin. Set this once per bucket, with the S3 `PutBucketCors` call or the Cloudflare dashboard:
+
+```json
+[
+  {
+    "AllowedOrigins": ["http://localhost:3000"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Add the Render URL to `AllowedOrigins` before the first deploy. Without it, the admin upload fails with a CORS error. This setting is not in the repo.
+
+### 11.4 Attachments on comments
 
 A comment row can have up to 5 attachments (`maxRows: 5`). They reference `media` documents. Attachment permissions follow the `media` collection.
 
@@ -542,6 +576,7 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `ticketStatus.test.ts` | Every allowed transition, a set of rejected transitions, the closed terminal state, the assignee guard, same-status no-op, status validation |
 | `dueDate.test.ts` | The four SLA windows, overdue before and after the due time, resolved and closed never overdue, missing due date, ISO string input |
 | `access.test.ts` | `hasRole` with valid and malformed users, `isAdmin`, `isStaff` for admin, agent, both, anonymous |
+| `uploadRules.test.ts` | Magic bytes for each allowed type, HTML sent as an image, a header that is too short, NUL bytes in text, extension match and mismatch, the 5 MB boundary, and the order of the checks |
 
 These are pure functions, so the tests need no database and run in about 0.1 seconds.
 
@@ -550,7 +585,7 @@ These are pure functions, so the tests need no database and run in about 0.1 sec
 - **Hooks against a real database**: the `beforeTicketChange` hook (timestamps, comment authorship) and the transition enforcement on real writes.
 - **Access rules end to end**: the agent gets 403 on delete, the admin gets 200.
 - **Bulk endpoint**: partial failures, 400 and 401 and 403 responses.
-- **Upload validation**: rejected MIME type, rejected size.
+- **Upload hook and R2 cleanup**: the `media` hook and the folder deletion run against Payload and R2. The pure rules are unit tested (section 14.1). The direct upload flow is checked by a live script that is not in the repo.
 - **Admin UI**: login, list filters, inline comments.
 - **Roles through the API**: an agent gets 403 on delete, a no-role user cannot log in to the admin, and the CSRF origin check rejects foreign origins.
 
@@ -589,13 +624,14 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Secrets in git | `.env` is ignored. Only `.env.example` with placeholders is committed. | In place |
 | Access control | Every collection has access functions, enforced on REST and local API calls. | In place |
 | Anonymous access | Anonymous requests to tickets return 403. The bulk endpoint returns 401. | Verified against the running dev server |
-| Upload types and size | Checked on the server. | In place |
+| Upload types, size, and content | Checked on the server: MIME allowlist, 5 MB, extension, magic bytes (section 11.2). | In place |
 | Remote URL fetch | Disabled (`pasteURL: false`). Prevents server-side request forgery. | In place |
 | File reads | Through the access-controlled route. The bucket is private. | In place |
-| Upload content | Magic-byte check not implemented. | Known gap (section 11.2) |
+| Direct upload access | Only staff get a signed R2 upload URL. A document needs a receipt the server signed (section 11.3). | In place |
+| R2 CORS | `PUT` allowed only from the app origin. The Render origin must be added before deploy (section 11.3). | In place for dev; Render pending |
 | Default privileges | New accounts have no roles and no admin access. | In place |
 | Admin login | Only staff roles can open the admin panel. | In place |
-| CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. Verified in Payload source. | In place |
+| CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. A request with no `Origin` header falls back to `Sec-Fetch-Site`: `same-origin`, `same-site`, and `none` are accepted, and anything else is anonymous. Verified in Payload source. | In place |
 | Rate limiting | Not implemented. Login brute-force protection is not configured. | Known gap |
 | Security headers | Not configured. | Known gap |
 
@@ -611,6 +647,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 - Comments have no separate edit rights.
 - Seed tickets share a creation time within minutes.
 - No email notifications and no SLA escalation. Both need background jobs, which are out of scope.
+- The admin's browser upload path (the `S3ClientUploadHandler` UI) is tested through the API only, not by clicking through the admin.
 
 ### Planned next steps (in order)
 
@@ -621,10 +658,11 @@ If a command fails with `Missing required environment variable`, the `.env` file
 5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions.
 6. README for the project: setup, architecture summary, what was skipped and why.
 7. Deploy to Render: build and start commands, environment variables, first migration, smoke test.
-8. Upload content check (magic bytes), login rate limiting, security headers.
+8. Login rate limiting and security headers. The magic-byte check is done (section 11.2).
 9. OAuth (GitHub) later, after the core is complete.
 
 ### Open verification items
 
 - Confirmed: after `pnpm seed --reset` on the Neon dev branch, no orphaned comment rows or tag-join rows remain. Child rows are removed through the foreign-key cascade.
 - Done: the default 2,000-ticket seed took 233 seconds. Recorded in section 13.5.
+- Done: direct upload checked against the dev server with a live script that is not in the repo. It covers signing, the PUT to R2, the receipt, validation, the thumbnail, cleanup, and access. 15 of 15 checks pass.

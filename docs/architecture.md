@@ -97,7 +97,7 @@ flowchart LR
 
 ### Cloudflare R2 via `@payloadcms/storage-s3`
 - **Role:** Object storage for the `media` upload collection. Bucket stays private.
-- **Why now:** R2 is S3-compatible. Payload's docs recommend the S3 adapter for Node hosts, and the R2-specific adapter is for Cloudflare Workers only. Files never touch Render's ephemeral disk.
+- **Why now:** R2 is S3-compatible. Payload's docs recommend the S3 adapter for Node hosts, and the R2-specific adapter is for Cloudflare Workers only. Files never touch Render's ephemeral disk, and browsers upload straight to R2 (ADR-022).
 - **When to replace:** Storage or egress passes the free tier.
 
 ### sharp
@@ -143,7 +143,7 @@ Domain: Support Ticket Tracker (ADR-017).
 | `tags` | name (unique), color | many-to-many with `tickets` | Managed by admin; agents read only. |
 | `tickets` | subject (5–200 chars), description (rich text), status (select), priority (select: low, normal, high, urgent), dueAt (set on create from priority, see ADR-018), resolvedAt, closedAt | FK to `customers`, FK to `users` (assignee, nullable), many-to-many with `tags` | Status transitions in a hook. `isOverdue` is computed from `dueAt`, `status`, and the current time. |
 | `comments` (array rows inside `tickets`) | body, attachments (hasMany `media`, max 5), author (FK to `users`, set by server), createdAt (set by server) | FK to `users`, many-to-many with `media` | Edited inline on the ticket. Replaces the separate collection (ADR-019). |
-| `media` (upload) | file, alt | — | Stored in R2. MIME allowlist (images, PDF, plain text), 5 MB limit. |
+| `media` (upload) | file, alt | — | Stored in R2. Uploaded straight from the browser with a signed URL (ADR-022). MIME allowlist (images, PDF, plain text), 5 MB limit, magic-byte check. |
 
 Status values: `new`, `in_progress`, `waiting_customer`, `resolved`, `closed`. Transitions are defined in one map (`src/lib/ticketStatus.ts`), see ADR-017.
 
@@ -302,6 +302,13 @@ Access by role:
 - **Tradeoff:** Deploys must set `PAYLOAD_PUBLIC_SERVER_URL`. Startup fails without it. Existing seed media keeps the names it was created with until the next reset.
 - **Revisit when:** Multiple front-end origins need cookie access (then extend the allowlist deliberately).
 
+### ADR-022: Direct browser uploads to R2 through Payload's clientUploads
+- **Choice:** The `s3Storage` plugin's `clientUploads` option. Staff request a signed PUT URL from `/api/storage-s3-generate-signed-url`. The URL is refused for sizes over 5 MB. The browser uploads straight to the private R2 bucket, then creates the `media` document with the signed receipt. `requiresClientUploadReceipt: true` on `media` refuses a document without a receipt. The `beforeOperation` hook validates the stored bytes (MIME, size, extension, magic bytes) and deletes the upload folder from R2 when a check fails. Storage keys are `<random UUID folder>/<sanitized client file name>`. This supersedes the UUID file-name rule in ADR-020 and ADR-021, and resolves the magic-byte limitation noted in ADR-020.
+- **Why:** The brief asks for uploads that go straight to R2 without passing through the server. Payload's built-in flow does this and avoids a custom signing endpoint.
+- **Tradeoff:** The file's own name (sanitized) is part of the key, so the UUID rule is relaxed. A new folder per upload keeps names from colliding. The signed URL checks only size and headers, so the server still reads each file from R2 once to check its content and make thumbnails. The R2 bucket's CORS list must include each app origin, including the Render URL before the first deploy.
+- **Verified against:** `@payloadcms/storage-s3` 3.93.0 source (signing endpoint, `resolveSignedURLKey`) and Payload core `addDataAndFileToRequest` (receipt requirement). A live script run against the dev server passed 15 of 15 checks.
+- **Revisit when:** Untrusted users can upload, or a served file type can run code. Then re-encode images and check the whole file, not only its first bytes.
+
 ## Cost Estimate
 
 - **Monthly now:** $0 (Render free, Neon free, R2 free tier, Groq free tier when added)
@@ -311,7 +318,7 @@ Access by role:
 - **Render free instances sleep** after 15 minutes idle. The first request can take 30–60 seconds, which looks like a broken deploy to a reviewer. Hit the URL once before sharing it.
 - **Neon free storage is 0.5 GB.** Seed data must stay small: text-heavy rows are fine, but do not store large images in the database.
 - **R2 free tier is 10 GB.** Seed images should be small (under about 100 KB each, a few hundred total).
-- **File bytes pass through the web service** (ADR-011). Large downloads use the free instance's bandwidth and time. Keep upload size limits strict.
+- **File downloads pass through the web service** (ADR-011). Large downloads use the free instance's bandwidth and time. Uploads go straight to R2 (ADR-022), but the server still reads each file once to validate it. Keep upload size limits strict.
 - **Unbounded AI chat use** can exhaust the Groq free quota and produce 429 errors. Add a per-user request cap (for example, 20 messages per hour), stored in the database or in memory on the single instance.
 - **Uploads without size limits** fill storage quickly. Enforce a 5 MB limit on the `media` collection.
 
@@ -330,7 +337,7 @@ Access by role:
 - Role restrictions MUST be enforced in collection `access` functions. A hidden button or hidden collection is not a restriction on its own.
 - The bulk status endpoint and the AI endpoint MUST check the caller's role on the server, not only in the component.
 - Schema changes MUST be made with `payload migrate:create` and committed. Production MUST run `payload migrate`. DO NOT use `push` in production.
-- Every upload MUST be validated: MIME allowlist on the `media` collection, 5 MB size limit, and generated filenames.
+- Every upload MUST be validated on the server: MIME allowlist on the `media` collection, 5 MB size limit, a file signature (magic bytes) that matches the MIME type, and an extension that matches the MIME type. Browsers upload straight to R2 through `clientUploads` (staff only), and the server MUST create the `media` document only with a receipt it signed (ADR-022). Storage keys are a random UUID folder plus the sanitized client file name. The original name goes to `originalName`.
 - The AI endpoint MUST send only field metadata (label, admin.description, select options) and the user's question to the model. DO NOT send database records or other users' data.
 - The AI endpoint MUST cap user input at 500 characters and MUST return a friendly error on timeout or API failure. DO NOT let an AI failure break the admin.
 - Seed data MUST be created by the `pnpm seed` script (a TypeScript script using Payload's local API). DO NOT load demo data in migrations.
@@ -348,6 +355,7 @@ Access by role:
 | 2026-11-10 | Scaffold implemented (Payload 3.93.0, Node 24.22.2) | Comments moved to inline rows on tickets (ADR-019). Upload validation on the server (ADR-020). Bulk status endpoint at `/api/tickets/bulk-status`. Unit tests for status workflow, due dates, and roles. |
 | 2026-11-10 | Open decisions resolved before scaffolding | Node 24 LTS (was 22). Neon dev branch for local DB. Per-milestone local commits, push at end. AI chat in scope, OAuth deferred. Ticket number field dropped. dueAt rule and seed rules fixed. Added ADR-018. |
 | 2026-11-10 | Domain chosen: Support Ticket Tracker | Replaced the Book Lending example in Data Model with tickets, customers, tags, comments, media, and users. Added role access matrix. Appended ADR-017 with status transitions and name mapping. Added Don't Use Now entry for SLA and notifications. Added transition rules to Agent Rules. |
+| 2026-11-10 | Direct uploads to R2 | Browsers upload through Payload `clientUploads` with signed URLs (ADR-022). Storage keys are now `<uuid folder>/<client name>`, which replaces the UUID file-name rule in ADR-020 and ADR-021. Magic-byte and extension checks added, resolving the ADR-020 limitation. Updated Data Model, Use Now (R2), Cost Traps, and Agent Rules. |
 
 ---
 To update, run `/planfirst` again.
