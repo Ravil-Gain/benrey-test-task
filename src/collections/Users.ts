@@ -8,10 +8,12 @@ export const Users: CollectionConfig = {
   admin: {
     useAsTitle: 'email',
     defaultColumns: ['email', 'name', 'roles'],
-    // Agents never see the Users section in the sidebar.
+    // Hides the sidebar entry only. The access rules below are what actually block agents.
     hidden: ({ user }) => !isAdmin({ req: { user } }),
   },
   access: {
+    // Only staff can log in to the admin. Someone with no roles can exist, but can't do anything.
+    admin: isStaff,
     read: isStaff,
     create: isAdmin,
     update: isAdmin,
@@ -28,13 +30,12 @@ export const Users: CollectionConfig = {
       name: 'roles',
       type: 'select',
       hasMany: true,
-      required: true,
-      defaultValue: ['agent'],
+      // No default role. An admin has to assign one.
+      defaultValue: [],
       options: [
         { label: 'Admin', value: 'admin' },
         { label: 'Agent', value: 'agent' },
       ],
-      // Only admins can change roles. Access is checked on the field as well.
       access: {
         update: isAdmin,
       },

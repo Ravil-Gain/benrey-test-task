@@ -118,7 +118,7 @@ flowchart LR
 ## Add Later
 
 - **Groq API (open-weight Llama model) for the AI help chat** — add when: the core admin requirements (TASK.md sections 1–8) are complete and deployed. Not now because: the chat is a bonus, and it needs the field-description context built first. Free tier, no card required.
-- **OAuth provider (GitHub) via a Payload-compatible auth plugin or custom strategy** — add when: all required admin features, both roles, and their tests are passing. Not now because: OAuth is a bonus, and the role model must be settled first. A new OAuth user must start with the `viewer` role, and an admin promotes them.
+- **OAuth provider (GitHub) via a Payload-compatible auth plugin or custom strategy** — add when: all required admin features, both roles, and their tests are passing. Not now because: OAuth is a bonus, and the role model must be settled first. A new OAuth user starts with no roles and no admin panel access. An admin assigns a role (see ADR-021).
 
 ## Don't Use Now
 
@@ -255,7 +255,7 @@ Access by role:
 ### ADR-017: Domain — Support Ticket Tracker
 - **Choice:** Support Ticket Tracker. Collections: `users`, `customers`, `tags`, `tickets`, `comments`, `media`. Roles: `admin` and `agent`.
 - **Why:** The status workflow gives a real business rule that is easy to test. Bulk status change is a natural admin action. Comment attachments exercise uploads beyond a single cover image. The two roles have clear boundaries. The domain needs no concurrency control, background jobs, or realtime updates, so it stays off deep technical ground.
-- **Name mapping for earlier ADRs:** ADR-010 "Loans list view" means the Tickets list view. ADR-014 `loans` and `loanStatus.ts` mean `tickets` and `ticketStatus.ts`. ADR-012 role `viewer` means `agent`. The mechanisms in those ADRs are unchanged.
+- **Name mapping for earlier ADRs:** ADR-010 "Loans list view" means the Tickets list view. ADR-014 `loans` and `loanStatus.ts` mean `tickets` and `ticketStatus.ts`. ADR-012 role `viewer` is replaced by `agent`. This is not a read-only role: agents create and edit tickets and customers, and only admins delete or manage users. The access mechanism in ADR-012 still applies.
 - **Status transitions** (`src/lib/ticketStatus.ts`):
   - `new` → `in_progress`, `closed`
   - `in_progress` → `waiting_customer`, `resolved`
@@ -290,6 +290,17 @@ Access by role:
 - **Why:** The `mimeTypes` option in Payload only filters the file picker in the browser. The server hook is the real check, and it runs on every write path.
 - **Limitation:** The MIME type comes from the client's upload header. Content sniffing (checking magic bytes) is not implemented. Add it with a small library when time allows.
 - **Revisit when:** Untrusted users can upload files, or an uploaded file type can execute.
+
+### ADR-021: Security hardening: CSRF allowlist, staff-only admin, no default role, server-side file names
+- **Choice:**
+  - `serverURL` and `csrf` are set explicitly from `PAYLOAD_PUBLIC_SERVER_URL`. Payload then rejects cookie-authenticated requests whose `Origin` is not the app's own origin.
+  - `users.access.admin` allows only staff roles. A user with no roles cannot open the admin panel.
+  - `users.roles` has no default. New accounts have no access until an admin assigns a role.
+  - Uploads are stored under a random UUID name with an extension taken from the validated MIME type. The original name is kept in a read-only `originalName` field.
+- **Why:** Payload's default CSRF allowlist is empty, which disables the origin check. A default role would give any future self-registered account access. Client-chosen file names can collide or carry path tricks.
+- **Verified against:** Payload 3.93.0 source (`csrf` handling in `extractJWT`, `serverURL` pushed into `csrf` in sanitize, cookie `SameSite=Lax` default).
+- **Tradeoff:** Deploys must set `PAYLOAD_PUBLIC_SERVER_URL`. Startup fails without it. Existing seed media keeps the names it was created with until the next reset.
+- **Revisit when:** Multiple front-end origins need cookie access (then extend the allowlist deliberately).
 
 ## Cost Estimate
 
@@ -333,6 +344,7 @@ Access by role:
 |------|--------|---------|
 | 2026-11-10 | Initial generation | Django stack (ADR-001 to ADR-008) |
 | 2026-11-10 | Stack change: Django replaced by Payload CMS 3 on Node.js | Rewrote Use Now, Add Later, Don't Use Now, diagrams, data model, cost traps, agent rules. Appended ADR-009 to ADR-016. ADR-001 to ADR-008 decision text unchanged; a Status line was added to ADR-004, ADR-005, and ADR-006 pointing to their replacements. ADR-001 and ADR-002 are superseded by ADR-009 and ADR-010 (see those entries). |
+| 2026-11-10 | Review pass: security and consistency fixes | Explicit CSRF allowlist via PAYLOAD_PUBLIC_SERVER_URL, staff-only admin access, no default role, UUID file names with originalName (ADR-021). Clarified that the `viewer` to `agent` mapping is not read-only. Fixed OAuth default-role note. |
 | 2026-11-10 | Scaffold implemented (Payload 3.93.0, Node 24.22.2) | Comments moved to inline rows on tickets (ADR-019). Upload validation on the server (ADR-020). Bulk status endpoint at `/api/tickets/bulk-status`. Unit tests for status workflow, due dates, and roles. |
 | 2026-11-10 | Open decisions resolved before scaffolding | Node 24 LTS (was 22). Neon dev branch for local DB. Per-milestone local commits, push at end. AI chat in scope, OAuth deferred. Ticket number field dropped. dueAt rule and seed rules fixed. Added ADR-018. |
 | 2026-11-10 | Domain chosen: Support Ticket Tracker | Replaced the Book Lending example in Data Model with tickets, customers, tags, comments, media, and users. Added role access matrix. Appended ADR-017 with status transitions and name mapping. Added Don't Use Now entry for SLA and notifications. Added transition rules to Agent Rules. |

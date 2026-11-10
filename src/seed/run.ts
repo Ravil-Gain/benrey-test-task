@@ -18,14 +18,13 @@ import {
 } from './data'
 import type { SeedOptions } from './options'
 
-const SEED_RANDOM = 20261110
+const SEED = 20261110 // same seed every run, so bugs on demo data can be reproduced
 const CUSTOMER_COUNT = 2000
 const MEDIA_COUNT = 100
-const MEDIA_IMAGE_COUNT = 60
-const CHUNK_SIZE = 10
+const SCREENSHOT_COUNT = 60 // the rest are text logs
+const BATCH_SIZE = 10 // how many writes run in parallel
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// Weights are relative, not percentages.
 const PRIORITY_WEIGHTS: Record<TicketPriority, number> = { low: 15, normal: 50, high: 25, urgent: 10 }
 const STATUS_WEIGHTS: Record<TicketStatus, number> = {
   new: 20,
@@ -36,29 +35,31 @@ const STATUS_WEIGHTS: Record<TicketStatus, number> = {
 }
 const OPEN_STATUSES: readonly TicketStatus[] = ['new', 'in_progress', 'waiting_customer']
 
-type TicketContext = {
+const RETRY_ATTEMPTS = 3
+// Network errors that are worth another try against a remote database.
+const TRANSIENT_ERROR = /ETIMEDOUT|ECONNRESET|EPIPE|Connection terminated|timeout/i
+
+type Refs = {
   customers: number[]
   agents: number[]
   tags: number[]
   media: number[]
 }
 
-/**
- * Creates demo data through the Payload local API, so every hook, access rule,
- * and storage adapter runs as it does for real users.
- */
+let startedAt = Date.now()
+
 export async function runSeed(payload: Payload, options: SeedOptions): Promise<void> {
-  const existingTickets = await payload.count({ collection: 'tickets', overrideAccess: true })
+  const existing = await payload.count({ collection: 'tickets', overrideAccess: true })
 
   if (options.reset) {
     log('Resetting existing data')
     await resetAll(payload)
-  } else if (existingTickets.totalDocs > 0) {
-    log(`Database already has ${existingTickets.totalDocs} tickets. Run with --reset to regenerate.`)
+  } else if (existing.totalDocs > 0) {
+    log(`Database already has ${existing.totalDocs} tickets. Run with --reset to regenerate.`)
     return
   }
 
-  const rng = createRandom(SEED_RANDOM)
+  const rng = createRandom(SEED)
   startedAt = Date.now()
 
   const agents = await seedStaff(payload, options)
@@ -73,28 +74,13 @@ export async function runSeed(payload: Payload, options: SeedOptions): Promise<v
   const media = await seedMedia(payload, rng, MEDIA_COUNT)
   log(`Media: ${media.length} files`)
 
-  await seedTickets(payload, rng, options.ticketCount, {
-    customers,
-    agents,
-    tags,
-    media,
-  })
+  await seedTickets(payload, rng, options.ticketCount, { customers, agents, tags, media })
 
   log('Done')
 }
 
-let startedAt = Date.now()
-
-function log(message: string): void {
-  const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
-  console.log(`[seed +${elapsed}s] ${message}`)
-}
-
-/**
- * Deletes everything. Media goes through payload.delete so the R2 files are
- * removed too. Other collections use the database-level delete, which is one
- * query per table and does not run per-document hooks.
- */
+// Media goes through payload.delete so the files in R2 get removed too.
+// Everything else is one database-level delete per table, which skips the hooks.
 async function resetAll(payload: Payload): Promise<void> {
   await payload.delete({
     collection: 'media',
@@ -109,7 +95,7 @@ async function resetAll(payload: Payload): Promise<void> {
   }
 }
 
-/** Creates the admin and the agents. Returns the agent IDs for ticket assignment. */
+// Returns the agent IDs so tickets can be assigned to them.
 async function seedStaff(payload: Payload, options: SeedOptions): Promise<number[]> {
   await payload.create({
     collection: 'users',
@@ -136,29 +122,29 @@ async function seedStaff(payload: Payload, options: SeedOptions): Promise<number
     })
     agents.push(agent.id)
   }
-
   return agents
 }
 
 async function seedCustomers(payload: Payload, rng: Random, count: number): Promise<number[]> {
   const ids: number[] = []
-  for (let start = 0; start < count; start += CHUNK_SIZE) {
-    const size = Math.min(CHUNK_SIZE, count - start)
-    // Data is built synchronously so the random sequence stays deterministic.
+  for (let start = 0; start < count; start += BATCH_SIZE) {
+    const size = Math.min(BATCH_SIZE, count - start)
+
+    // Build the rows before any await, so the random sequence doesn't depend on timing.
     const rows = Array.from({ length: size }, (_, offset) => {
-      const i = start + offset
       const first = rng.pick(FIRST_NAMES)
       const last = rng.pick(LAST_NAMES)
       return {
         name: `${first} ${last}`,
-        // The index keeps emails unique. `.test` is reserved for examples.
-        email: `${slug(first)}.${slug(last)}.${i}@customers.example.test`,
+        // The index makes the email unique. .test is reserved for examples.
+        email: `${slug(first)}.${slug(last)}.${start + offset}@customers.example.test`,
         company: rng.pick(COMPANIES),
       }
     })
+
     const docs = await Promise.all(
       rows.map((data) =>
-        payload.create({ collection: 'customers', overrideAccess: true, data }),
+        withRetry(() => payload.create({ collection: 'customers', overrideAccess: true, data })),
       ),
     )
     ids.push(...docs.map((doc) => doc.id))
@@ -179,39 +165,46 @@ async function seedTags(payload: Payload, rng: Random): Promise<number[]> {
   return ids
 }
 
-const MEDIA_UPLOAD_CONCURRENCY = 5
-
 async function seedMedia(payload: Payload, rng: Random, count: number): Promise<number[]> {
-  // Generate the files first (cheap, CPU only), then upload them in small parallel batches.
-  const files = []
+  // Make all the files first. That part is CPU only and quick.
+  const files: { alt: string; name: string; mimetype: string; data: Buffer }[] = []
   for (let i = 0; i < count; i++) {
-    const isImage = i < MEDIA_IMAGE_COUNT
-    files.push({
-      alt: isImage ? `Screenshot ${i + 1}` : `Log ${i + 1}`,
-      data: isImage
-        ? await makePng(rng)
-        : Buffer.from(`Log excerpt ${i + 1}\nStatus: 500\nRetrying in 30 seconds\n`, 'utf8'),
-      mimetype: isImage ? 'image/png' : 'text/plain',
-      name: isImage ? `screenshot-${i + 1}.png` : `log-${i + 1}.txt`,
-    })
+    const isScreenshot = i < SCREENSHOT_COUNT
+    files.push(
+      isScreenshot
+        ? {
+            alt: `Screenshot ${i + 1}`,
+            name: `screenshot-${i + 1}.png`,
+            mimetype: 'image/png',
+            data: await makePng(rng),
+          }
+        : {
+            alt: `Log ${i + 1}`,
+            name: `log-${i + 1}.txt`,
+            mimetype: 'text/plain',
+            data: Buffer.from(`Log excerpt ${i + 1}\nStatus: 500\nRetrying in 30 seconds\n`, 'utf8'),
+          },
+    )
   }
 
+  // Then upload them a few at a time.
   const ids: number[] = []
-  for (let start = 0; start < files.length; start += MEDIA_UPLOAD_CONCURRENCY) {
-    const batch = files.slice(start, start + MEDIA_UPLOAD_CONCURRENCY)
+  for (let start = 0; start < files.length; start += 5) {
     const docs = await Promise.all(
-      batch.map((file) =>
-        payload.create({
-          collection: 'media',
-          overrideAccess: true,
-          data: { alt: file.alt },
-          file: {
-            data: file.data,
-            mimetype: file.mimetype,
-            name: file.name,
-            size: file.data.length,
-          },
-        }),
+      files.slice(start, start + 5).map((file) =>
+        withRetry(() =>
+          payload.create({
+            collection: 'media',
+            overrideAccess: true,
+            data: { alt: file.alt },
+            file: {
+              data: file.data,
+              mimetype: file.mimetype,
+              name: file.name,
+              size: file.data.length,
+            },
+          }),
+        ),
       ),
     )
     ids.push(...docs.map((doc) => doc.id))
@@ -219,6 +212,7 @@ async function seedMedia(payload: Payload, rng: Random, count: number): Promise<
   return ids
 }
 
+// A plain coloured rectangle is enough for a demo screenshot.
 async function makePng(rng: Random): Promise<Buffer> {
   return sharp({
     create: {
@@ -236,34 +230,32 @@ async function seedTickets(
   payload: Payload,
   rng: Random,
   count: number,
-  ctx: TicketContext,
+  refs: Refs,
 ): Promise<void> {
   const now = Date.now()
 
-  for (let start = 0; start < count; start += CHUNK_SIZE) {
-    const size = Math.min(CHUNK_SIZE, count - start)
-
-    // Build the chunk synchronously so the random sequence does not depend on timing.
-    const chunk = Array.from({ length: size }, (_, offset) =>
-      buildTicket(rng, ctx, start + offset, now),
+  for (let start = 0; start < count; start += BATCH_SIZE) {
+    const size = Math.min(BATCH_SIZE, count - start)
+    const batch = Array.from({ length: size }, (_, offset) =>
+      buildTicket(rng, refs, start + offset, now),
     )
 
     await Promise.all(
-      chunk.map(async ({ data, overdueDueAt }) => {
-        const ticket = await payload.create({
-          collection: 'tickets',
-          overrideAccess: true,
-          data,
-        })
-        // The create hook sets dueAt from priority. For some open tickets, move
-        // the due date into the past so the overdue filter has real data to show.
-        if (overdueDueAt) {
-          await payload.update({
-            collection: 'tickets',
-            id: ticket.id,
-            overrideAccess: true,
-            data: { dueAt: overdueDueAt },
-          })
+      batch.map(async ({ data, pastDueAt }) => {
+        const ticket = await withRetry(() =>
+          payload.create({ collection: 'tickets', overrideAccess: true, data }),
+        )
+        // The create hook sets dueAt from the priority. For some open tickets we move it
+        // back into the past, so the overdue view has real examples to show.
+        if (pastDueAt) {
+          await withRetry(() =>
+            payload.update({
+              collection: 'tickets',
+              id: ticket.id,
+              overrideAccess: true,
+              data: { dueAt: pastDueAt },
+            }),
+          )
         }
       }),
     )
@@ -275,34 +267,35 @@ async function seedTickets(
   }
 }
 
-function buildTicket(rng: Random, ctx: TicketContext, index: number, now: number) {
+function buildTicket(rng: Random, refs: Refs, index: number, now: number) {
   const status = rng.weighted(STATUS_WEIGHTS)
   const priority = rng.weighted(PRIORITY_WEIGHTS)
-  const customer = rng.pick(ctx.customers)
+  const customer = rng.pick(refs.customers)
   const company = rng.pick(COMPANIES)
 
-  // Statuses after "new" need an assignee, because the workflow requires one.
-  const assignee = status !== 'new' || rng.next() < 0.4 ? rng.pick(ctx.agents) : undefined
+  // The workflow needs an assignee before a ticket can be in progress, so most
+  // non-new tickets get one. Some new ones get one too.
+  const assignee = status !== 'new' || rng.next() < 0.4 ? rng.pick(refs.agents) : undefined
 
   const tagCount = rng.int(0, 3)
   const tags = new Set<number>()
   while (tags.size < tagCount) {
-    tags.add(rng.pick(ctx.tags))
+    tags.add(rng.pick(refs.tags))
   }
 
   const comments = Array.from({ length: rng.int(0, 5) }, () => ({
     body: rng.pick(COMMENT_BODIES),
-    author: rng.pick(ctx.agents),
-    attachments: rng.next() < 0.08 ? [rng.pick(ctx.media)] : undefined,
+    author: rng.pick(refs.agents),
+    attachments: rng.next() < 0.08 ? [rng.pick(refs.media)] : undefined,
   }))
 
-  const overdue =
+  const pastDueAt =
     OPEN_STATUSES.includes(status) && rng.next() < 0.3
       ? new Date(now - rng.int(1, 30) * DAY_MS).toISOString()
       : undefined
 
   return {
-    overdueDueAt: overdue,
+    pastDueAt,
     data: {
       subject: `${rng.pick(SUBJECTS)} - ${company} #${index + 1}`,
       description: rng.next() < 0.3 ? richText(rng.pick(DESCRIPTIONS)) : undefined,
@@ -314,6 +307,31 @@ function buildTicket(rng: Random, ctx: TicketContext, index: number, now: number
       comments,
     } satisfies Partial<Ticket> & { subject: string; customer: number },
   }
+}
+
+// Runs the operation again if the error looks like a dropped network connection.
+// Anything else fails straight away.
+async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (!TRANSIENT_ERROR.test(message) || attempt === RETRY_ATTEMPTS) {
+        throw error
+      }
+      log(`Transient database error, retrying (${attempt}/${RETRY_ATTEMPTS - 1}): ${message}`)
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
+    }
+  }
+  throw lastError
+}
+
+function log(message: string): void {
+  const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1)
+  console.log(`[seed +${elapsed}s] ${message}`)
 }
 
 function richText(text: string): Ticket['description'] {
@@ -340,6 +358,7 @@ function richText(text: string): Ticket['description'] {
   }
 }
 
+// "Priya Shah" -> "priya.shah". Used for email addresses.
 function slug(value: string): string {
   return value
     .toLowerCase()

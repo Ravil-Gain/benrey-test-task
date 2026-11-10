@@ -130,7 +130,7 @@ export interface UserAuthOperations {
 export interface User {
   id: number;
   name: string;
-  roles: ('admin' | 'agent')[];
+  roles?: ('admin' | 'agent')[] | null;
   updatedAt: string;
   createdAt: string;
   email: string;
@@ -206,7 +206,7 @@ export interface Ticket {
   resolvedAt?: string | null;
   closedAt?: string | null;
   /**
-   * Comments are edited inline with the ticket. Author and time are set by the server.
+   * Edit comments right here. The server fills in the author and time.
    */
   comments?:
     | {
@@ -227,6 +227,7 @@ export interface Ticket {
 export interface Media {
   id: number;
   alt?: string | null;
+  originalName?: string | null;
   _objectKey?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -416,6 +417,7 @@ export interface TicketsSelect<T extends boolean = true> {
  */
 export interface MediaSelect<T extends boolean = true> {
   alt?: T;
+  originalName?: T;
   _objectKey?: T;
   updatedAt?: T;
   createdAt?: T;

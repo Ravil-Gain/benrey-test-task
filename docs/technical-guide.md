@@ -171,6 +171,7 @@ Every variable the app reads, where it is read, and what happens when it is miss
 |---|---|---|---|
 | `DATABASE_URL` | `src/lib/env.ts` → `payload.config.ts` | Neon Postgres connection string. Use the dev branch locally and the production branch on Render. | Startup throws `Missing required environment variable: DATABASE_URL`. |
 | `PAYLOAD_SECRET` | `src/lib/env.ts` → `payload.config.ts` | Signs Payload sessions and tokens. Generate with `openssl rand -base64 48`. Changing it logs everyone out. | Startup throws. |
+| `PAYLOAD_PUBLIC_SERVER_URL` | `src/lib/env.ts` → `payload.config.ts` | Public origin of the app, for example `http://localhost:3000` or the Render URL. Becomes `serverURL` and the only allowed `Origin` for cookie-authenticated requests (CSRF allowlist). Must start with `http://` or `https://`. Trailing slashes are removed. | Startup throws. |
 | `R2_ACCOUNT_ID` | `src/lib/env.ts` → `payload.config.ts` | Cloudflare account ID. Builds the R2 endpoint `https://<id>.r2.cloudflarestorage.com`. | Startup throws. |
 | `R2_BUCKET` | `src/lib/env.ts` → `payload.config.ts` | Name of the private R2 bucket that stores uploads. | Startup throws. |
 | `R2_ACCESS_KEY_ID` | `src/lib/env.ts` → `payload.config.ts` | R2 API token access key. Token scope: Object Read and Write on this bucket only. | Startup throws. |
@@ -201,7 +202,10 @@ This file is the single source of runtime configuration. It is loaded by the adm
 | `collections` | `[Users, Customers, Tags, Tickets, Media]` | Every collection the app manages. Order sets the sidebar order. |
 | `editor` | `lexicalEditor()` | Rich text editor for `tickets.description`. Lexical is Payload's default editor. |
 | `secret` | `env.payloadSecret()` | Read from the environment, never hardcoded. |
-| `db` | `postgresAdapter({ pool, push: false })` | PostgreSQL through the connection string. `push: false` means schema changes happen only through committed migrations (see [section 12](#12-database-and-migrations)). |
+| `db` | `postgresAdapter({ pool, push: false })` | PostgreSQL through the connection string. `pool.keepAlive: true` keeps idle TCP connections alive. `push: false` means schema changes happen only through committed migrations (see [section 12](#12-database-and-migrations)). |
+| `serverURL` | `env.serverUrl()` | The public origin of the app. Payload uses it for links and as the CSRF allowlist. |
+| `csrf` | `[serverURL]` | Origins allowed to send cookie-authenticated requests. Payload rejects a cookie request whose `Origin` is not listed. We set it explicitly because Payload's default is an empty list, which turns the origin check off (see section 16). |
+| `onInit` | attaches an `error` listener to `payload.db.pool` | Without a listener, an idle connection that fails in the background crashes the process. With it, the pool drops that connection and opens a new one on the next query. See [section 12.5](#125-connection-failures). |
 | `plugins` | `[s3Storage({...})]` | Stores the `media` collection's files in the R2 bucket. |
 | `sharp` | `sharp` | Image processing for thumbnails. |
 | `typescript.outputFile` | `src/payload-types.ts` | Where the generated types are written. |
@@ -220,11 +224,11 @@ Source of truth: the collection files in `src/collections/`. Generated types: `s
 
 | Collection | Key fields | Relations | Notes |
 |---|---|---|---|
-| `users` | `email`, `password` (hashed), `name`, `roles` (`admin`, `agent`, multi-select) | none | Auth collection. Passwords are hashed by Payload, never stored in plain text. |
+| `users` | `email`, `password` (hashed), `name`, `roles` (`admin`, `agent`, multi-select, no default) | none | Auth collection. Passwords are hashed by Payload (PBKDF2-SHA256 with a salt), never stored in plain text. Only staff roles can open the admin panel (`access.admin`). |
 | `customers` | `name`, `email` (unique), `company` | none | The people who open tickets. They are not login users. |
 | `tags` | `name` (unique, max 40), `color` (hex, validated) | none | Used for many-to-many labelling of tickets. |
 | `tickets` | `subject` (5–200 chars), `description` (rich text), `status`, `priority`, `dueAt`, `resolvedAt`, `closedAt`, `isOverdue` (virtual), `comments` (array) | FK to `customers` (required), FK to `users` as `assignee`, many-to-many to `tags` | Core collection. Status workflow and due dates are enforced in a hook. |
-| `media` | `alt`, file, generated `thumbnail` | none | Uploads. Stored in R2. Limits in [section 11](#11-uploads-and-object-storage). |
+| `media` | `alt`, file stored under a random UUID name, `originalName` (read-only, the name the uploader gave), generated `thumbnail` | none | Uploads. Stored in R2. Limits in [section 11](#11-uploads-and-object-storage). |
 
 ### 7.2 Ticket fields in detail
 
@@ -304,7 +308,7 @@ Defined in `src/lib/dueDate.ts`.
 | Role | Stored as | Who gets it |
 |---|---|---|
 | `admin` | `users.roles` contains `admin` | Full control. Manages users and tags, deletes tickets and customers. |
-| `agent` | `users.roles` contains `agent` | Works on tickets. Cannot delete, cannot manage users or tags. Default role for new users. |
+| `agent` | `users.roles` contains `agent` | Works on tickets. Cannot delete, cannot manage users or tags. Assigned by an admin. |
 
 A user can hold both roles. Access checks use `hasRole`, which accepts any shape of `req.user` and returns `false` for anything malformed.
 
@@ -328,11 +332,13 @@ A user can hold both roles. Access checks use `hasRole`, which accepts any shape
 | `users` | create, update, delete | yes | no | no |
 | `users.roles` | update | yes | no | no |
 | `users` (admin sidebar) | visible | yes | hidden | hidden |
+| Admin panel login | allowed | yes | yes | no (a user with no roles cannot open the admin) |
 
 ### 9.3 How it is enforced
 
 - **Collection access functions**: each collection's `access` object calls `isAdmin` or `isStaff` (`src/lib/access.ts`). Payload runs these on every REST and local API call, not only in the admin UI.
 - **Field access**: `users.roles` has its own `access.update: isAdmin`, so changing roles is restricted even inside an otherwise allowed update.
+- **Admin panel login**: `users.access.admin` allows only staff roles. A user with no roles can exist (for example, a future OAuth sign-up) but cannot open the admin until an admin assigns a role.
 - **Sidebar visibility**: `users` has `admin.hidden` that returns true for agents. This hides the section. It does not restrict access. The access functions do that.
 
 A hidden button or hidden section is not a restriction on its own. Every restriction above is an access function, so it holds even if someone calls the API directly.
@@ -341,6 +347,7 @@ A hidden button or hidden section is not a restriction on its own. Every restric
 
 - Row-level rules (for example, "an agent sees only tickets assigned to them"). Not implemented. The access functions are at collection level.
 - Customers have no login, so there is no customer role.
+- **Agents can still read the users list through the API.** `users.access.read` allows any staff role, because the ticket view needs assignee names. The sidebar hides the section, but a direct REST call to `/api/users` returns the list to an agent. Restricting this without breaking assignee display needs field-level or query-level access, which is future work.
 
 ---
 
@@ -385,6 +392,7 @@ The admin UI button for this endpoint is not built yet (see [section 17](#17-kno
 ### 11.1 Where files live
 
 - **Bucket:** a private Cloudflare R2 bucket. Nothing is public. Files are not served by bucket URL.
+- **Stored name:** a random UUID with an extension taken from the validated MIME type. The client's file name is never used for storage. It is kept in `originalName` for display.
 - **Read path:** Payload's file route (`/api/media/file/<filename>`). It checks the `media` read access (staff only) before it streams the file. A logged-out visitor gets 403.
 - **Write path:** the `s3Storage` plugin uploads the file to R2 when the `media` document is created. Thumbnails are generated with sharp and uploaded too.
 - **Delete path:** deleting a `media` document also removes its files from R2.
@@ -399,6 +407,7 @@ Defined in `src/collections/Media.ts`.
 |---|---|---|
 | Allowed MIME types | `beforeOperation` hook (server) | `image/jpeg`, `image/png`, `image/webp`, `application/pdf`, `text/plain` |
 | Maximum size | `beforeOperation` hook (server) | 5 MB (`MAX_UPLOAD_BYTES`) |
+| Stored file name | `beforeOperation` hook (server) | `<uuid>` plus the extension for the validated MIME type (`.jpg`, `.png`, `.webp`, `.pdf`, `.txt`) |
 | Remote URL fetch | `upload.pasteURL: false` | Disabled. The server never downloads a file from a URL the client sends. |
 | Generated thumbnails | `upload.imageSizes` | 240×240 centre crop for images |
 
@@ -440,6 +449,20 @@ Schema changes follow the same steps every time:
 ### 12.3 Migration history so far
 
 - `20261110_152856_initial`: creates all tables for the five collections, Payload's own tables (`payload_migrations`, `payload_kv`, `payload_locked_documents`, `payload_preferences`), and the join tables for tags and roles.
+- `20261110_165322_media_original_name_roles`: adds `media.original_name`. The column already existed on the dev branch because of an earlier dev-mode sync, so the statement is `ADD COLUMN IF NOT EXISTS`. The roles change needs no SQL, because roles live in a join table.
+
+**Dev-mode marker.** If a database was ever synced in dev mode, Payload writes a row named `dev` with `batch = -1` into `payload_migrations`. From then on `pnpm payload migrate` asks "data loss will occur, proceed?" before it runs. That row must never exist in the production database. Production should only ever get migrations. The dev branch still has the row, so answer the prompt after checking `pnpm payload migrate:status`.
+
+### 12.5 Connection failures
+
+Neon is a remote database. Connections can time out, and an idle pooled connection can fail in the background.
+
+- **Background failures on idle connections:** `onInit` in `payload.config.ts` attaches an `error` listener to the pool. The failure is logged, the pool discards the connection, and the next query opens a new one. Without this listener the process crashes. This was observed during the first full seed run: a `read ETIMEDOUT` on an idle connection killed the process after about 6,800 tickets.
+- **Keep-alive:** `pool.keepAlive: true` sends TCP keep-alive packets, so the network does not silently drop an idle connection.
+- **Retries in the seed:** each create and update is retried up to three times on transient network errors (`ETIMEDOUT`, `ECONNRESET`, `EPIPE`, and similar). Other errors fail immediately.
+- **Known trade-off:** a retried create can duplicate a ticket if the database committed the first attempt but the response was lost. This is rare. The ticket count after a run shows whether it happened.
+
+The app itself does not retry requests. A failed request returns an error to the user, and the user retries.
 
 ### 12.4 Reset behavior
 
@@ -489,7 +512,7 @@ Requirements: `DATABASE_URL`, `PAYLOAD_SECRET`, the R2 variables, and the three 
 - Statuses are set at creation, so the seed does not replay the workflow history.
 - Comment authors are set explicitly in the seed. The hook uses them, because there is no logged-in user during the seed.
 
-### 13.5 Speed
+### 13.5 Speed and reliability
 
 Each record is created through Payload's local API, so hooks, access checks, and storage run as they do for real users. This is slower than a bulk SQL insert, and that trade-off is intentional. Each create makes several round trips to Neon, which runs in a different region from the development machine. Writes are done in parallel batches of 10.
 
@@ -529,6 +552,7 @@ These are pure functions, so the tests need no database and run in about 0.1 sec
 - **Bulk endpoint**: partial failures, 400 and 401 and 403 responses.
 - **Upload validation**: rejected MIME type, rejected size.
 - **Admin UI**: login, list filters, inline comments.
+- **Roles through the API**: an agent gets 403 on delete, a no-role user cannot log in to the admin, and the CSRF origin check rejects foreign origins.
 
 Planned: integration tests with Vitest against a Neon test branch, and a few Playwright end-to-end tests for the admin. Both are listed in [section 17](#17-known-limitations-and-next-steps).
 
@@ -560,8 +584,8 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 | Area | What is in place | Status |
 |---|---|---|
-| Passwords | Hashed by Payload's auth layer. Never stored in plain text. | In place |
-| Sessions | Signed with `PAYLOAD_SECRET`. Stored in `users_sessions`. | In place |
+| Passwords | Hashed by Payload with PBKDF2-SHA256, 600,000 iterations, and a random salt (`generatePasswordSaltHash` in Payload 3.93). Not bcrypt. Never stored in plain text. | In place |
+| Sessions | Signed with `PAYLOAD_SECRET`. Stored in `users_sessions`. Cookies use Payload's default `SameSite=Lax`. | In place |
 | Secrets in git | `.env` is ignored. Only `.env.example` with placeholders is committed. | In place |
 | Access control | Every collection has access functions, enforced on REST and local API calls. | In place |
 | Anonymous access | Anonymous requests to tickets return 403. The bulk endpoint returns 401. | Verified against the running dev server |
@@ -569,7 +593,9 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Remote URL fetch | Disabled (`pasteURL: false`). Prevents server-side request forgery. | In place |
 | File reads | Through the access-controlled route. The bucket is private. | In place |
 | Upload content | Magic-byte check not implemented. | Known gap (section 11.2) |
-| CSRF | Payload admin uses cookie-based sessions. Protection against cross-site requests needs to be verified in Payload's documentation before we claim it on the review call. | To verify |
+| Default privileges | New accounts have no roles and no admin access. | In place |
+| Admin login | Only staff roles can open the admin panel. | In place |
+| CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. Verified in Payload source. | In place |
 | Rate limiting | Not implemented. Login brute-force protection is not configured. | Known gap |
 | Security headers | Not configured. | Known gap |
 
@@ -600,7 +626,6 @@ If a command fails with `Missing required environment variable`, the `.env` file
 
 ### Open verification items
 
-- Confirm Payload's CSRF behaviour for admin requests and document it accurately (section 16).
 - Measure the seed on the full dataset and record the time here.
 - Confirmed: after `pnpm seed --reset` on the Neon dev branch, no orphaned comment rows or tag-join rows remain. Child rows are removed through the foreign-key cascade.
 - Measure the full 20,000-ticket seed and record the time in section 13.5.
