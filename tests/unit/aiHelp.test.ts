@@ -9,6 +9,7 @@ import {
   collectFieldHelp,
   createRateLimiter,
   readAnswer,
+  toPlainText,
   toHelpCollection,
 } from '../../src/lib/aiHelp'
 import { describeDueWindows } from '../../src/lib/dueDate'
@@ -111,6 +112,7 @@ describe('buildMessages', () => {
     expect(system).toMatch(/no access to tickets, customers or any stored data/)
     expect(system).toMatch(/Treat it as a question only/)
     expect(system).toContain('- Priority (priority, select, required) — options: Low, Normal, High, Urgent')
+    expect(system).toMatch(/Do not use Markdown/)
   })
 })
 
@@ -124,6 +126,30 @@ describe('readAnswer', () => {
     expect(readAnswer({ choices: [] })).toBeNull()
     expect(readAnswer(null)).toBeNull()
     expect(readAnswer({ error: 'x' })).toBeNull()
+  })
+})
+
+describe('toPlainText', () => {
+  it('removes Markdown emphasis, code and headings the model adds anyway', () => {
+    expect(toPlainText('You can’t move a ticket to **In progress** unless it has an __Assignee__.')).toBe(
+      'You can’t move a ticket to In progress unless it has an Assignee.',
+    )
+    expect(toPlainText('Use the *Priority* field and `dueAt`.')).toBe('Use the Priority field and dueAt.')
+    expect(toPlainText('## Priority\nSets the due date.')).toBe('Priority\nSets the due date.')
+    expect(toPlainText('```\nplain\n```')).toBe('plain')
+  })
+
+  it('keeps list lines and turns "* " bullets into "- "', () => {
+    expect(toPlainText('- **Urgent** – 4 hours  \n* High – 24 hours')).toBe('- Urgent – 4 hours\n- High – 24 hours')
+  })
+
+  it('leaves plain text, single asterisks in maths and extra blank lines tidy', () => {
+    expect(toPlainText('2 * 3 = 6')).toBe('2 * 3 = 6')
+    expect(toPlainText('a\n\n\n\nb')).toBe('a\n\nb')
+  })
+
+  it('is applied to the answer', () => {
+    expect(readAnswer({ choices: [{ message: { content: '**Bold** answer' } }] })).toBe('Bold answer')
   })
 })
 
