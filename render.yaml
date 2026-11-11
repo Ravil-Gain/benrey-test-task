@@ -1,5 +1,5 @@
-# Render Blueprint for the web service. Create it in the Render dashboard with
-# New > Blueprint and point it at this repository. Setup steps: docs/technical-guide.md, section 18.
+# Render Blueprint for the web service: New > Blueprint in the Render dashboard, pointed at
+# this repository. First-deploy steps: docs/technical-guide.md, section 9.
 services:
   - type: web
     name: benrey-support-tickets
@@ -8,14 +8,16 @@ services:
     region: frankfurt
     branch: main
     autoDeploy: true
-    # Node comes from .node-version. pnpm comes from the packageManager field via Corepack.
-    # NODE_ENV is not set here: the build needs devDependencies (TypeScript, types).
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    # Node comes from .node-version, pnpm from the packageManager field via Corepack.
+    # --prod=false installs devDependencies for the build although NODE_ENV is production.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build
     # Free instances have no pre-deploy command, so migrations run before the server starts.
     # A failed migration stops the deploy, and the previous version keeps serving.
     startCommand: pnpm start:prod
     healthCheckPath: /healthz
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: COREPACK_ENABLE_DOWNLOAD_PROMPT
         value: '0'
       - key: PAYLOAD_SECRET
