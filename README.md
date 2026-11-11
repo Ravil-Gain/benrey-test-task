@@ -144,12 +144,14 @@ Browser ──► Render: Next.js + Payload ──► Neon PostgreSQL
 
 ## Tests
 
-`pnpm test` runs 192 unit tests in about a second, with no database or network: every
-status transition and the start rule, due dates, roles, upload validation, the hooks and
-both endpoints with fake requests, the AI context and every AI failure path, and the deploy
-scripts' rules. What they do not cover (real database, R2, browser flows) is listed in the
-[technical guide, section 14](docs/technical-guide.md#14-tests); those parts were checked by
-hand on the dev server and on Render.
+| Command | What runs |
+|---|---|
+| `pnpm test` | 198 unit tests in about a second, no database or network: every status transition and the start rule, due dates, roles, upload validation, the hooks and both endpoints with fake requests, the AI context and every AI failure path |
+| `pnpm test:integration` | 13 tests on a separate `_test` database the setup creates and migrates: access rules, the workflow on real writes, the bulk endpoint |
+| `pnpm test:e2e` | 10 Playwright tests in Chromium, as admin, agent and logged out: menus, delete rights, bulk bar, status field, field help |
+
+What is still checked by hand (R2, real Groq answers) is listed in the
+[technical guide, section 14](docs/technical-guide.md#14-tests).
 
 ## Left out on purpose
 
@@ -179,10 +181,10 @@ hand on the dev server and on Render.
 
 ## With more time
 
-1. Integration tests against a Neon test branch, and a few Playwright tests for the admin.
-2. Per-IP rate limiting on login and security headers.
-3. A stored, indexed "overdue" flag kept up to date, so it can be filtered.
-4. GitHub OAuth, with an admin approving the role of each new user.
+1. Per-IP rate limiting on login and security headers.
+2. A stored, indexed "overdue" flag kept up to date, so it can be filtered.
+3. GitHub OAuth, with an admin approving the role of each new user.
+4. Running the three test suites in CI on every push.
 5. A paid Render instance, to remove the cold start.
 
 ## Documentation

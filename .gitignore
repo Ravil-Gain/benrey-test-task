@@ -7,3 +7,5 @@ coverage
 *.tsbuildinfo
 next-env.d.ts
 .claude/launch.json
+test-results
+playwright-report

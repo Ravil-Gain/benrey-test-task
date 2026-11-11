@@ -364,7 +364,7 @@ Access by role:
 - Ticket status transitions MUST be defined only in `src/lib/ticketStatus.ts`. The `tickets` hook and the bulk status endpoint MUST both call that module. DO NOT duplicate the transition map anywhere else.
 - The bulk status endpoint MUST apply the same transition and guard checks per ticket, and MUST report invalid transitions instead of failing the whole batch.
 - Every status transition and validation rule MUST have a Vitest test.
-- Every code change MUST ship with Vitest tests in the same commit: new or changed logic in `src/lib/`, hooks, endpoints, and plugins. A bug fix MUST add a test that fails without the fix. Logic that needs a real database or R2 MUST be split into a pure function or tested with fakes. Any part that still cannot be tested MUST be listed in `docs/technical-guide.md` section 14.2.
+- Every code change MUST ship with Vitest tests in the same commit: new or changed logic in `src/lib/`, hooks, endpoints, and plugins. A bug fix MUST add a test that fails without the fix. Logic that needs a real database or R2 MUST be split into a pure function or tested with fakes. Any part that still cannot be tested MUST be listed in `docs/technical-guide.md` section 14.4. Integration tests (`pnpm test:integration`) cover what needs a real database.
 
 ## Changelog
 
@@ -387,3 +387,4 @@ Access by role:
 | 2026-11-11 | AI field help | Added ADR-025: a global "Field help" button and `POST /api/ai-help` on Groq `openai/gpt-oss-20b`, field metadata only, 500 characters, 10 seconds, friendly failures, 10 questions per user per minute. Every field got an `admin.description`. `GROQ_API_KEY` is optional. |
 | 2026-11-11 | Brief compliance review | Checked the take-home brief against the code and docs. Groq moved from Add Later to Use Now; ADR-010 marked extended. The technical guide gained a brief requirements map, session expiry and leak handling, the login lockout (Payload's default, checked), troubleshooting a 500, and growth notes. |
 | 2026-11-11 | Docs cleanup | Removed the generator's Alignment Score block. Added a note that ADR-001 to ADR-008 are the replaced Django plan. Ticket filter indexes and the favicon added (technical guide sections 7.4 and 4.9). |
+| 2026-11-11 | Integration and browser tests | `pnpm test:integration` runs the real Payload config on a separate `<name>_test` database that the setup creates and migrates; it refuses any other database name. `pnpm test:e2e` runs Playwright in Chromium against the dev server as admin, agent and logged out, read-only. Production AI answers checked. |

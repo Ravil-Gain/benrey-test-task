@@ -21,7 +21,9 @@
     "seed": "tsx src/seed/index.ts",
     "r2:cors": "tsx src/scripts/setR2Cors.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1165.0",
@@ -38,9 +40,12 @@
     "sharp": "^0.34.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@types/node": "^24.0.0",
+    "@types/pg": "8.20.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "pg": "8.20.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "vitest": "5.0.1"
