@@ -3,14 +3,14 @@
 Full spec: `./docs/architecture.md` — read before adding any infrastructure.
 
 ### Stack (momento: validate)
-- Framework: Payload CMS 3 (stable 3.x, pinned exact) on Next.js App Router, TypeScript strict, Node.js 24 LTS (24.22.2 or later), pnpm 10
-- Admin: Payload admin, extended only via `admin.components` (bulk status action, AI help widget)
+- Framework: Payload CMS 3 (stable 3.x, pinned exact) on Next.js App Router, TypeScript strict, Node.js 24 LTS (24.22.2 pinned in `.node-version`, range `>=24.22.1 <25`), pnpm 10
+- Admin: Payload admin, extended only via `admin.components` (bulk status bar, ticket status field, AI help button)
 - Database: PostgreSQL on Neon via `@payloadcms/db-postgres` (DATABASE_URL)
 - Object storage: Cloudflare R2 via `@payloadcms/storage-s3` (private bucket, served through Payload's file route)
 - Image processing: sharp
 - Hosting: Render Node web service
 - Tests: Vitest for business logic
-- AI help chat (later): Groq free-tier open-weight model, synchronous, 10s timeout
+- AI help chat: Groq free tier, `openai/gpt-oss-20b` (open-weight), synchronous, 10s timeout, `GROQ_API_KEY` optional
 
 ### Agent Rules
 - Keep `docs/technical-guide.md` in sync with the code in the same commit. Any change to a config file, dependency, environment variable, collection, hook, endpoint, command, or seed behaviour must update the matching section of that guide.

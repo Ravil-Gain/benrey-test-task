@@ -1,30 +1,12 @@
-# Benrey Admin Take-Home — Architecture
+# Support Ticket Tracker — Architecture
 
-> Generated on 2026-11-10 | Momento: **validate** — MVP / take-home submission, solo builder, no real users yet
+> Decision records for the take-home, first written on 2026-11-10 and kept current. How each decision is implemented is in the [technical guide](technical-guide.md).
+
+**Reading the ADRs.** ADR-001 to ADR-008 are the first plan, on Django. ADR-009 replaced Django with Payload CMS 3, and ADR-009 onwards describe the app as built. The Django records are kept to show how the decision was made; a Status line on each points to its replacement where there is one.
 
 ## Summary
 
-A single Node.js application built on Payload CMS 3 (Next.js App Router, TypeScript). Payload generates the admin UI from collection configs and provides auth, access control, uploads, and a REST/local API. Data lives in managed PostgreSQL (Neon). Uploaded files live in a private Cloudflare R2 bucket and are served through Payload's access-controlled file route. Two small custom admin components cover the bulk status action and the AI help widget. The domain is Support Ticket Tracker (see ADR-017).
-
-## Alignment Score
-
-```
-Dimension extraction — 9/9 dimensions confident for a validate-stage take-home
-
-  project_moment     validate   (0.95)  "take-home", "MVP-sized", "demo"
-  product_type       web        (0.85)  "admin interface", "live URL"
-  team_size          1          (0.95)  candidate builds alone
-  user_scale         lt_1k      (0.80)  demo accounts only; seed data is for admin performance, not real traffic
-  monthly_budget     free       (0.85)  brief: free-tier services "genuinely fine everywhere"
-  needs_realtime     false      (0.85)  CRUD + admin, no live features
-  access_pattern     balanced   (0.75)  admin CRUD with list filters and search
-  has_offline        false      (0.90)  web app, always online
-  latency_critical   false      (0.85)  admin/CRUD workload
-  compliance         none       (—)     no regulated data in scope
-  ai_complexity      simple     (—)     single LLM call grounded in field descriptions, no RAG
-```
-
-Stack alignment for a validate-stage take-home: every "Use Now" item fits this moment. Nothing from the scale tier is included.
+A single Node.js application built on Payload CMS 3 (Next.js App Router, TypeScript). Payload generates the admin UI from collection configs and provides auth, access control, uploads, and a REST/local API. Data lives in managed PostgreSQL (Neon). Uploaded files live in a private Cloudflare R2 bucket and are served through Payload's access-controlled file route. Three small custom admin components cover the bulk status action, the ticket status field, and the AI help button. The AI help calls Groq's free tier (ADR-025). The domain is Support Ticket Tracker (see ADR-017).
 
 ## Architecture Diagram (ASCII)
 
@@ -110,6 +92,11 @@ flowchart LR
 - **Why now:** Native Node builds (`pnpm install --frozen-lockfile && pnpm build`, start with `pnpm start:prod`), a Blueprint (`render.yaml`) that keeps the service config in git, automatic HTTPS, and a free tier. Free instances sleep after 15 minutes of inactivity, which is accepted for this task.
 - **When to replace:** Cold starts hurt reviewers. Upgrade to a paid instance (about $7/mo) rather than changing platform.
 
+### Groq API (`openai/gpt-oss-20b`, free tier)
+- **Role:** Answers the AI field help questions from field metadata only (ADR-016, ADR-025).
+- **Why now:** The core admin is deployed, so the bonus came next. Open-weight model, free tier, one synchronous call with a 10-second timeout. The key is optional, so the app starts without it.
+- **When to replace:** Groq retires the model (switch `GROQ_MODEL`), or answers need a stronger model.
+
 ### Vitest
 - **Role:** Unit tests for business logic (ticket status transitions, validation helpers).
 - **Why now:** Runs TypeScript without a separate build step, and is fast enough for the rubric's "tests for the one piece of real business logic".
@@ -117,7 +104,6 @@ flowchart LR
 
 ## Add Later
 
-- **Groq API (open-weight Llama model) for the AI help chat** — add when: the core admin requirements (TASK.md sections 1–8) are complete and deployed. Not now because: the chat is a bonus, and it needs the field-description context built first. Free tier, no card required.
 - **OAuth provider (GitHub) via a Payload-compatible auth plugin or custom strategy** — add when: all required admin features, both roles, and their tests are passing. Not now because: OAuth is a bonus, and the role model must be settled first. A new OAuth user starts with no roles and no admin panel access. An admin assigns a role (see ADR-021).
 
 ## Don't Use Now
@@ -154,18 +140,21 @@ Access by role:
 ## Architecture Decision Records
 
 ### ADR-001: Django instead of Next.js or FastAPI
+- **Status:** Superseded by ADR-009 (Payload CMS 3 instead of Django).
 - **Choice:** Django 5.2 LTS as the single application framework.
 - **Why:** The admin is the core deliverable, and Django's admin is the framework's own tooling. Auth, CSRF, sessions, and migrations come built in, so the security checklist is mostly configuration.
 - **Tradeoff:** Server-rendered only, and the public-facing UI would be less flexible than a React frontend. Acceptable because the brief centers on the admin.
 - **Revisit when:** A non-admin public UI or a mobile client is required.
 
 ### ADR-002: Use the Django admin as the admin UI (no custom SPA)
+- **Status:** Superseded by ADR-010 (Payload admin with custom components).
 - **Choice:** ModelAdmin subclasses with `list_display`, `list_filter`, `search_fields`, inlines, custom actions, and `get_readonly_fields` / `has_*_permission` for role differences.
 - **Why:** Meets the requirement with framework tooling, which the rubric rewards and hand-built admin UI penalizes.
 - **Tradeoff:** Styling options are limited to templates and CSS overrides. Complex multi-step ops workflows would be awkward.
 - **Revisit when:** Ops users need workflows beyond CRUD, filters, and bulk actions.
 
 ### ADR-003: Neon PostgreSQL as the managed database
+- **Status:** Still applies. Implemented with `@payloadcms/db-postgres` and committed migrations (ADR-013).
 - **Choice:** Neon free tier, one database for dev and production (separate branches for dev and production data).
 - **Why:** Managed Postgres with a free tier and a standard connection string. Does not expire the way Render's free Postgres does.
 - **Tradeoff:** Auto-suspended compute means the first query after idle adds a cold-start delay.
@@ -193,12 +182,14 @@ Access by role:
 - **Status:** Superseded by ADR-015 (Node.js stack).
 
 ### ADR-007: Synchronous AI help call with a timeout and graceful failure
+- **Status:** Still applies. Implemented as the AI field help (ADR-016, ADR-025).
 - **Choice:** One POST endpoint in the admin. The view builds a prompt from the model's field metadata (verbose_name, help_text, choices), caps user input at 500 characters, calls the model with a 10-second timeout, and returns a friendly message on any error.
 - **Why:** A single call does not justify a queue. A failure must never take down the admin.
 - **Tradeoff:** A slow model blocks one request until the timeout. Acceptable at demo traffic.
 - **Revisit when:** Timeouts are frequent, or streaming responses are needed.
 
 ### ADR-008: Render for hosting, Neon and R2 for managed services
+- **Status:** Still applies. Render, Neon and R2 are the deployed services (ADR-024).
 - **Choice:** Render web service plus Neon plus R2, all on free tiers.
 - **Why:** Lowest setup cost that still satisfies "real managed DB" and "real object storage" from the brief.
 - **Tradeoff:** Three vendors instead of one, and free-tier cold starts.
@@ -211,6 +202,7 @@ Access by role:
 - **Revisit when:** Payload 4 is stable and worth migrating to, or the admin cannot express a required workflow.
 
 ### ADR-010: Payload admin as the admin UI, extended with two custom components
+- **Status:** Extended. There are three components now: the bulk status bar (ADR-010), the ticket status field, and the AI help button (ADR-025). The AI help is one global button, not a component per edit view.
 - **Choice:** The default Payload admin, with `admin.components` for (1) a bulk status change action in the Loans list view and (2) the AI help widget. Supersedes ADR-002.
 - **Why:** Filters, search, relationship fields, and array fields come from Payload's admin. Only the two behaviors Payload does not provide are custom code.
 - **Tradeoff:** The bulk action is a custom component plus a custom endpoint, so it must re-check roles on the server, not just hide the button.
@@ -393,6 +385,5 @@ Access by role:
 | 2026-11-11 | Docs review | Agent Rules synced with CLAUDE.md: added the technical-guide sync rule, the no-default-role rule, and the CSRF allowlist rule, which were only in CLAUDE.md. |
 | 2026-11-11 | Status choices in the admin | Every ticket now starts as `new`: the create form shows the status read-only and the hook refuses any other start status. The field is not hidden with `admin.condition`, because that would make the column nullable. The edit form's status select (a custom field component) offers only the saved status and its allowed next steps. Duplicates start as `new`. The seed creates every ticket as `new` and walks it to its status. |
 | 2026-11-11 | AI field help | Added ADR-025: a global "Field help" button and `POST /api/ai-help` on Groq `openai/gpt-oss-20b`, field metadata only, 500 characters, 10 seconds, friendly failures, 10 questions per user per minute. Every field got an `admin.description`. `GROQ_API_KEY` is optional. |
-
----
-To update, run `/planfirst` again.
+| 2026-11-11 | Brief compliance review | Checked the take-home brief against the code and docs. Groq moved from Add Later to Use Now; ADR-010 marked extended. The technical guide gained a brief requirements map, session expiry and leak handling, the login lockout (Payload's default, checked), troubleshooting a 500, and growth notes. |
+| 2026-11-11 | Docs cleanup | Removed the generator's Alignment Score block. Added a note that ADR-001 to ADR-008 are the replaced Django plan. Ticket filter indexes and the favicon added (technical guide sections 7.4 and 4.9). |

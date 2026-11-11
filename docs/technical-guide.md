@@ -25,6 +25,7 @@ Contents:
 17. [Known limitations and next steps](#17-known-limitations-and-next-steps)
 18. [Deployment on Render](#18-deployment-on-render)
 19. [AI field help](#19-ai-field-help)
+20. [Brief requirements map](#20-brief-requirements-map)
 
 ---
 
@@ -49,7 +50,8 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   │   │   ├── admin/           /admin, the admin UI. importMap.js is generated
 │   │   │   ├── api/[...slug]/   Payload REST API (/api/tickets, /api/users, ...)
 │   │   │   └── layout.tsx
-│   │   └── (frontend)/          Root URL (redirects to /admin) and /healthz for Render
+│   │   ├── (frontend)/          Root URL (redirects to /admin) and /healthz for Render
+│   │   └── favicon.ico          App icon, served at /favicon.ico (section 4.9)
 │   ├── collections/             One file per collection: fields, access, admin options
 │   ├── components/              Custom admin components: bulk status bar, ticket status field, AI field help button
 │   ├── endpoints/               Custom REST endpoints (bulk status, AI field help)
@@ -193,6 +195,11 @@ The Render Blueprint: the web service as code. Every setting the dashboard would
 
 `NODE_ENV` is not set on purpose. With `NODE_ENV=production`, `pnpm install` skips `devDependencies`, and the build needs TypeScript and the type packages. `next build` and `next start` set `NODE_ENV=production` for the app themselves.
 
+
+### 4.9 `src/app/favicon.ico`
+
+The app icon: a white ticket on a blue square, as 16, 32 and 48 pixel PNG images in one ICO file (1.5 KB). Next.js serves it at `/favicon.ico` for every route, and `admin.meta.icons` points the admin to it, so the admin tab shows it instead of Payload's logo. Before it existed, `/favicon.ico` answered 404 on Render. It was drawn as an SVG and converted with `sharp`; to change it, replace the file.
+
 ---
 
 ## 5. Environment variables
@@ -235,6 +242,7 @@ This file is the single source of runtime configuration. It is loaded by the adm
 | `admin.components.providers` | `['/components/AiHelp#AiHelpProvider']` | Wraps the admin to add the "Field help" button on every page for logged-in users ([section 19](#19-ai-field-help)). The storage plugin adds its own provider to the same list. |
 | `endpoints` | `[{ path: '/ai-help', method: 'post' }]` | `POST /api/ai-help`, the AI field help. The storage plugin adds its signed-URL endpoint to the same list. |
 | `admin.meta.titleSuffix` | ` · Support` | Appears in the browser tab title. |
+| `admin.meta.icons` | `/favicon.ico` | The app's own icon in the admin tab instead of Payload's logo (section 4.9). |
 | `collections` | `[Users, Customers, Tags, Tickets, Media]` | Every collection the app manages. Order sets the sidebar order. |
 | `editor` | `lexicalEditor()` | Rich text editor for `tickets.description`. Lexical is Payload's default editor. |
 | `secret` | `env.payloadSecret()` | Read from the environment, never hardcoded. |
@@ -287,6 +295,7 @@ The brief asks for inline editing of a related model. Payload's array fields are
 - `tickets.subject`: length validated, 5–200 characters.
 - `tags.color`: validated against `#rrggbb`.
 - Foreign keys: Payload creates them for relationship fields in the migration.
+- Indexes on tickets: `customer_id`, `assignee_id`, `created_at`, `updated_at` and the join tables for tags, attachments and comment rows (initial migration), plus `status`, `priority` and `due_at` (`index: true` on the fields, migration `20261111_114409_ticket_filter_indexes`). Those three are what the list filters and sorts on, and what the bulk bar's "select all" query uses. At 2,000 tickets the filters already answered in 0.1 to 0.6 seconds without them (section 18.5); the indexes keep it that way as the data grows.
 
 ---
 
@@ -469,7 +478,7 @@ Route: `POST /api/tickets/bulk-status`. Defined in `src/collections/Tickets.ts` 
 - **Bucket:** a private Cloudflare R2 bucket. Nothing is public. Files are not served by bucket URL.
 - **Stored name:** `<uuid>/<client file name>`. Each upload gets its own random UUID folder, so two files with the same name never collide. Payload sanitizes the client's file name before it becomes the key (`browser test?.png` is stored as `browser test.png`). The name as the uploader picked it is kept in `originalName` for display, with only a client path, control characters, and outer spaces removed, capped at 200 characters (`src/lib/originalName.ts`). For direct uploads this needs an extra step, described in section 11.3. This replaces the earlier UUID file-name rule (see ADR-022 in the architecture doc).
 - **Read path:** Payload's file route (`/api/media/file/<filename>`). It checks the `media` read access (staff only) before it streams the file. A logged-out visitor gets 403.
-- **Write path:** the browser uploads straight to R2 with a signed URL, then creates the `media` document (section 11.3). The server reads the object back from R2 once, to validate it and to generate thumbnails with sharp. Thumbnails are uploaded to R2 too. Payload skips a thumbnail when the image is smaller than 240×240 in both width and height.
+- **Write path:** the browser uploads straight to R2 with a signed URL, then creates the `media` document (section 11.3). The server reads the object back from R2 once, to validate it and to generate thumbnails with sharp. Payload streams it into a temporary file in the OS temp directory for that request and deletes it when the request ends, on success and on failure (`unlinkClientUploadTempFile`, called by Payload's endpoint wrapper). No uploaded file is kept on the server's disk: R2 is the only place files are stored. Thumbnails are uploaded to R2 too. Payload skips a thumbnail when the image is smaller than 240×240 in both width and height.
 - **Delete path:** deleting a `media` document also removes its files from R2.
 
 Using R2 means uploads survive a redeploy. Render's disk is ephemeral and would lose files.
@@ -572,6 +581,7 @@ Schema changes follow the same steps every time:
 ### 12.3 Migration history so far
 
 - `20261110_152856_initial`: creates all tables for the five collections, Payload's own tables (`payload_migrations`, `payload_kv`, `payload_locked_documents`, `payload_preferences`), and the join tables for tags and roles.
+- `20261111_114409_ticket_filter_indexes`: `CREATE INDEX` on `tickets.status`, `tickets.priority` and `tickets.due_at`, with matching `DROP INDEX` in `down`. Generated by `migrate:create`, not edited. Its SQL was run against the dev branch inside a transaction and rolled back: all three indexes were created and nothing was left behind. It is applied for real by `pnpm migrate` on the next deploy.
 - `20261110_165322_media_original_name_roles`: adds `media.original_name`. The column already existed on the dev branch because of an earlier dev-mode sync, so the statement is `ADD COLUMN IF NOT EXISTS`. The roles change needs no SQL, because roles live in a join table.
 
 **Dev-mode marker.** If a database was ever synced in dev mode, Payload writes a row named `dev` with `batch = -1` into `payload_migrations`. From then on `pnpm payload migrate` asks "data loss will occur, proceed?" before it runs. That row must never exist in the production database. Production should only ever get migrations, so never run `pnpm dev` with the production `DATABASE_URL`. The dev branch still has the row (written at 15:29 UTC and last updated at 16:54 UTC on 2026-11-10, by a dev server still running a config from before `push: false`). So `pnpm migrate` refuses to run on the dev branch until the row is checked and deleted.
@@ -680,6 +690,7 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `aiHelp.test.ts` | Markdown stripping (`toPlainText`). The AI context on the real tickets config: every field listed with a description, workflow and SLA texts taken from the rules, metadata only (no values or functions), hidden and internal fields skipped. Also the 500-character check, the prompt layout (rules and fields in the system message, the question alone and marked untrusted), reading the answer, the collection allowlist, the rate limiter, and the failure messages |
 | `groq.test.ts` | The Groq call with a fake `fetch`: request body (model, messages, low reasoning effort, reasoning not returned), key header, timeout signal, and every outcome: answer, timeout, 429, 500, network error, broken body, empty answer |
 | `aiHelpEndpoint.test.ts` | `POST /api/ai-help` with a fake request that has no database access: 401 and 403, 400 for empty and long input without a model call, the field reference and question sent, unknown collection falls back to tickets, no key gives 503, each failure gives a friendly message and is logged without the question, 10 questions a minute per user |
+| `schema.test.ts` | Schema decisions that the database relies on: `status`, `priority` and `dueAt` are indexed and their migration is committed, required and unique fields stay so, and `favicon.ico` is a valid ICO file with 16, 32 and 48 pixel PNG images |
 | `mediaHooks.test.ts` | The `media` hooks with a fake request (Map-backed key-value store, logger) and a mocked `deleteFolder`: which operations are checked, each rejection reason as the 400 message with `path: "filename"`, the size read from the temp file and not the declared size, R2 folder cleanup with and without a prefix, a failed cleanup still returning the validation error, the stored name taken and deleted (also on rejection and when expired), fallbacks when nothing is stored or the store fails, and `originalName` set only on create |
 | `rememberOriginalNames.test.ts` | The signed-URL wrapper with a fake plugin handler and a fake key-value store: the name is stored under the signed folder, the body is read once and handed on, the response stays readable, nothing is stored on a refused request or without a name or folder, a store failure does not fail the upload, and startup fails without the plugin endpoint |
 | `originalName.test.ts` | Original-name cleaning (characters the key loses are kept, client paths and control characters removed, length cap, empty input), the store key, and reading a stored name back (fresh, expired, malformed) |
@@ -728,7 +739,9 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Area | What is in place | Status |
 |---|---|---|
 | Passwords | Hashed by Payload with PBKDF2-SHA256, 600,000 iterations, and a random salt (`generatePasswordSaltHash` in Payload 3.93). Not bcrypt. Never stored in plain text. | In place |
-| Sessions | Signed with `PAYLOAD_SECRET`. Stored in `users_sessions`. The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` whenever `PAYLOAD_PUBLIC_SERVER_URL` is https (Payload's default is `Secure` off). Checked against a production build. | In place |
+| Sessions | Signed with `PAYLOAD_SECRET`. Stored server-side in `users_sessions` (`useSessions: true`, Payload's default), and a token expires after 2 hours (`tokenExpiration: 7200`). Logging out removes the session, so the token stops working before it expires. The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` whenever `PAYLOAD_PUBLIC_SERVER_URL` is https (Payload's default is `Secure` off). Checked against a production build. | In place |
+| Leaked token or session | Delete the user's rows in `users_sessions` (or log the user out) to end that session at once. Rotating `PAYLOAD_SECRET` ends every session and token. Without action, a leaked token works until it expires, at most 2 hours. | Procedure, not automated |
+| Login lockout | Payload's defaults: after 5 failed logins (`maxLoginAttempts: 5`) the account is locked for 10 minutes (`lockTime: 600000`), even for the right password. Checked on the dev server: the 6th attempt answers "This user is locked due to having too many failed login attempts." Trade-off: anyone who knows an email can lock that account for 10 minutes. | In place |
 | Secrets in git | `.env` is ignored. Only `.env.example` with placeholders is committed. | In place |
 | Access control | Every collection has access functions, enforced on REST and local API calls. | In place |
 | Anonymous access | Anonymous requests to tickets return 403. The bulk endpoint returns 401. | Verified against the running dev server |
@@ -744,8 +757,8 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Admin login | Only staff roles can open the admin panel. | In place |
 | CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. A request with no `Origin` header falls back to `Sec-Fetch-Site`: `same-origin`, `same-site`, and `none` are accepted, and anything else is anonymous. Verified in Payload source. | In place |
 | AI field help | Staff only, checked on the server. Input capped at 500 characters. Only field metadata and the question go to Groq, no records. 10 questions per user per minute. The answer is shown as plain text, never as HTML. Failures show a message and never break the admin ([section 19](#19-ai-field-help)). | In place |
-| Rate limiting | Not implemented for login. Login brute-force protection is not configured. Only the AI help has a per-user limit. | Known gap |
-| Security headers | Not configured. | Known gap |
+| Rate limiting | No per-IP limit on login or the API. The account lockout above covers password guessing per account. The AI help has its own per-user limit. | Known gap |
+| Security headers | Not configured: no HSTS, CSP or frame options, and `X-Powered-By: Next.js, Payload` is sent. | Known gap |
 
 ---
 
@@ -761,6 +774,13 @@ If a command fails with `Missing required environment variable`, the `.env` file
 - No email notifications and no SLA escalation. Both need background jobs, which are out of scope.
 - The admin's browser upload path is checked by hand, not by an automated end-to-end test.
 - An unused signed upload URL leaves a small expired entry in `payload_kv` (section 11.3).
+
+### What breaks first as it grows
+
+- **Twice the tickets:** nothing visible. Lists are paginated, and every column the list filters or sorts on is indexed (section 7.4). The seed run time doubles.
+- **Ten times the traffic:** the single free instance (512 MB, sleeps when idle) and the free Neon compute go first. The first changes: a paid always-on instance, Neon's pooled connection string sized for the instance count, and a shared store for the AI help's rate limit, because the in-memory one does not span instances.
+- **Bulk updates:** each ticket is a separate update through the workflow hook, five requests of 100 for 500 tickets. It is correct but linear. Thousands at once would need a job queue, which the rules leave out on purpose.
+- **Overdue filtering:** it is computed on read, so it cannot be filtered in the database. At scale it would need a stored flag kept up to date.
 
 ### Planned next steps (in order)
 
@@ -878,6 +898,14 @@ Ticket search covers the subject only (`listSearchableFields: ['subject']`). Fin
 
 **Known gaps.** An invalid enum value in a filter (for example `status=open`) answers 500 with a generic message instead of 400. The admin's filter uses a dropdown, so it cannot send one. Security headers are not set yet (next steps, item 7).
 
+### 18.6 When the live URL answers 500
+
+1. **Render dashboard → the service → Logs.** Payload logs the error with its stack on the server, while the browser only sees "Something went wrong." A missing or wrong environment variable shows by name at startup (`Missing required environment variable: …`, or the reason `PAYLOAD_PUBLIC_SERVER_URL` was refused).
+2. **Events tab.** A failed build or a failed `pnpm migrate` keeps the previous version serving. If the newest deploy failed, the error is in that deploy's log, not in the running service.
+3. **`/healthz`.** 200 means the server is up and the problem is in a route or the database. No answer means the instance is starting (cold start, about a minute) or crashed.
+4. **Database.** Neon's dashboard shows whether the branch is up and how many connections it has. A dev-mode marker in `payload_migrations` stops `pnpm migrate` with an explanation (section 12.2).
+5. **Reproduce locally** with the production build: `pnpm build && PORT=3100 PAYLOAD_PUBLIC_SERVER_URL=http://localhost:3100 pnpm start`, against a dev database.
+
 ---
 
 ## 19. AI field help
@@ -945,3 +973,35 @@ Cost and abuse: staff only, short input, short output (`max_completion_tokens: 7
 
 - Known limit: for "How do I pick the right priority?" the answer had the correct windows but added general examples ("critical outage, security breach") that are not in the help text. The prompt asks it not to guess, but a model can still generalize. Tightening the priority help text is the fix if this matters.
 - Production: logged out, `POST /api/ai-help` answers 401 and the login page has no button. Answers on Render are checked after the next login.
+
+---
+
+## 20. Brief requirements map
+
+Each requirement of the take-home brief, how it is met, and where the evidence is.
+
+| Brief requirement | How it is met | Evidence |
+|---|---|---|
+| Domain with 3–4 related models | Support Ticket Tracker: Ticket, Customer, Agent (a user role), Comment (inline rows), plus Tag and Media | Section 7, ADR-017, ADR-019 |
+| One FK, one many-to-many, one file field | Ticket → Customer (required) and → assignee; Ticket ↔ Tag; Comment attachments → Media | Section 7.1 |
+| Real business logic | Status workflow including the start status, assignee guard, due dates from priority, computed overdue | Section 8, `src/lib/ticketStatus.ts`, `src/lib/dueDate.ts` |
+| Tests for the logic (bonus) | Unit tests for every transition and rule, the hooks and both endpoints | Section 14 |
+| Realistic seed at scale, regenerable | `pnpm seed` / `pnpm seed --reset`: 2,000 tickets and customers, comments, attachments | Section 13 |
+| Real auth, hashed passwords, secure sessions | Payload auth: PBKDF2, server-side sessions, 2-hour tokens, lockout after 5 failures, Secure cookies on https | Section 16 |
+| Two roles that change the admin | Admin and Agent; agents have no Users section, no delete, read-only tags and media edits | Section 9, section 9.4 |
+| OAuth (bonus) | Not built; reason in the README | README "Left out on purpose" |
+| CSRF | `csrf: [PAYLOAD_PUBLIC_SERVER_URL]`, SameSite=Lax cookies | Section 6, section 16 |
+| Input validation | Field rules, upload checks (type, size, extension, signature), AI input cap | Sections 7, 11.2, 19 |
+| No secrets in the repo | `.env` ignored, placeholders only in `.env.example` | Section 4.5, 4.6 |
+| HTTPS | Render https, http redirected, https required in production | Section 18.5 |
+| Upload type and size limits | MIME allowlist, 5 MB, extension and magic bytes on the server | Section 11.2 |
+| Admin: list filters and search on 2+ models | Tickets and Customers lists with search, filters, columns, sorting at 2,000 rows | Section 18.5 |
+| Admin: inline editing of a related model | Comments edited inline on the ticket | ADR-019 |
+| Admin: a custom action | Bulk status bar on the tickets list | Section 10.1 |
+| Visibly restricted admin for the lower role | Checked on production as an agent | Section 9.4 |
+| Managed database, no local file | Neon PostgreSQL in every environment, no fallback | Section 12 |
+| Object storage, no local disk | Private R2; temporary processing file only, deleted per request | Section 11.1 |
+| Live URL, debug off, env settings, static files | Render, `next start`, env-only config, static assets and `/favicon.ico` return 200 | Section 18, section 4.9 |
+| AI chat grounded in field definitions (bonus) | Field help from `admin.description`, select options and labels; friendly failures; key as a secret | Section 19 |
+| README: setup, decisions, more time, skipped, why this stack | All present | README |
+| Incremental commits | One commit per change, each with its reason | `git log` |

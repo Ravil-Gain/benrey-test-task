@@ -36,6 +36,24 @@ request can take about a minute.
 - **Realistic demo data.** `pnpm seed` creates 1 admin, 8 agents, 2,000 customers, 30 tags,
   100 attachments and 2,000 tickets, walked through the workflow like real ones.
 
+## Data model
+
+The brief's four models, plus the two that make them work:
+
+| Model | What it is | Relations and constraints |
+|---|---|---|
+| Ticket | Subject, description, status, priority, due date | Required FK to Customer; optional FK to an agent (assignee); many-to-many to Tag; status and priority are enums; subject 5–200 characters |
+| Customer | Name, email, company | Email required and unique |
+| Agent | A user with the `agent` role | Users have roles `admin` and `agent`; no role means no admin access |
+| Comment | A row inside a ticket, edited inline | Author and time set by the server; up to 5 attachments (FK to Media) |
+| Tag | Name and color | Name unique; color must be a hex code |
+| Media | An uploaded file in R2 | Type, size, extension and file signature checked on the server |
+
+Comments are an array field on the ticket rather than a collection of their own (Payload
+stores them in a `tickets_comments` table), because they are always read and edited with
+their ticket; that is what makes them editable inline. Schema
+changes go through committed migrations (`src/migrations/`), never through auto-sync.
+
 ## Stack, and why
 
 | Part | Choice | Why |
@@ -72,35 +90,20 @@ For direct uploads the R2 bucket must allow your origin once:
 pnpm r2:cors http://localhost:3000
 ```
 
-### Configuration
+Settings come only from environment variables; a missing required one stops the app at
+startup with its name. The list is in [`.env.example`](.env.example) and the
+[technical guide, section 5](docs/technical-guide.md#5-environment-variables). All commands:
+[section 15](docs/technical-guide.md#15-commands). The everyday ones are `pnpm dev`,
+`pnpm test` and `pnpm typecheck`.
 
-All settings come from environment variables. A missing required one stops the app at
-startup with its name. See [`.env.example`](.env.example).
-
-| Variable | Required | What it is |
-|---|---|---|
-| `DATABASE_URL` | yes | Neon connection string. Use a separate branch for production. |
-| `PAYLOAD_SECRET` | yes | Long random string that signs sessions. |
-| `PAYLOAD_PUBLIC_SERVER_URL` | yes | The app's origin, no path. It is also the CSRF allowlist. Must be https in production. |
-| `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | yes | The private R2 bucket and its token. |
-| `GROQ_API_KEY` | no | Enables the AI field help. Without it the help says it is not set up. |
-| `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_AGENT_PASSWORD` | for `pnpm seed` | Seeded accounts. Passwords of 12+ characters. |
-
-### Commands
-
-| Command | Does |
-|---|---|
-| `pnpm dev` | Dev server with hot reload |
-| `pnpm test` | Unit tests |
-| `pnpm typecheck` | TypeScript check |
-| `pnpm build` / `pnpm start` | Production build and server |
-| `pnpm migrate` | Apply migrations; stops on a dev-mode schema push instead of prompting |
-| `pnpm payload migrate:create <name>` | New migration after a schema change |
-| `pnpm seed` / `pnpm seed --reset` | Fill an empty database / wipe and refill (never in production) |
-| `pnpm r2:cors <origin> …` | Set the R2 bucket's CORS rule |
+> **`pnpm seed --reset` deletes every ticket, customer, tag, file and user, then seeds again.**
+> It refuses to run only when `NODE_ENV=production`, which a laptop does not set, so check
+> `DATABASE_URL` before using it. Against production, only ever run `pnpm seed` without
+> `--reset`, once, on an empty database.
 
 ## Deploy
 
+Production runs `next start`, so debug mode is off and Next.js serves the static assets.
 Render reads [`render.yaml`](render.yaml): New → Blueprint → this repository, then enter the
 secret values it asks for. Every deploy builds with a frozen lockfile, runs migrations
 before the server starts, and switches traffic only after `/healthz` answers. After the
@@ -126,9 +129,22 @@ Browser ──► Render: Next.js + Payload ──► Neon PostgreSQL
 - **Three custom admin components:** the bulk status bar, the ticket status field and the
   field help button. Nothing else replaces Payload's UI.
 
+## Security
+
+| Brief item | How it is met |
+|---|---|
+| Hashed passwords | Payload's default: PBKDF2-SHA256 with a salt, never stored in plain text |
+| Sessions | HttpOnly, SameSite=Lax cookie, Secure on https; sessions stored server-side and expire after 2 hours |
+| Brute force | An account locks for 10 minutes after 5 failed logins (Payload's default, checked) |
+| CSRF | Cookie requests from any origin other than `PAYLOAD_PUBLIC_SERVER_URL` are treated as anonymous |
+| Input validation | Field rules on every collection; uploads checked by type, size, extension and file signature; AI questions capped at 500 characters |
+| Secrets | Only in environment variables; `.env` is ignored by git and `.env.example` has placeholders |
+| HTTPS | Render serves https and redirects http; production refuses a non-https server URL |
+| Accounts | No public sign-up; users are created by an admin or by the seed, and new users get no role |
+
 ## Tests
 
-`pnpm test` runs 185 unit tests in about a second, with no database or network: every
+`pnpm test` runs 192 unit tests in about a second, with no database or network: every
 status transition and the start rule, due dates, roles, upload validation, the hooks and
 both endpoints with fake requests, the AI context and every AI failure path, and the deploy
 scripts' rules. What they do not cover (real database, R2, browser flows) is listed in the
@@ -139,8 +155,9 @@ hand on the dev server and on Render.
 
 - **OAuth sign-in.** A bonus; the role model and the core admin came first. New OAuth users
   would start with no role, like any new account.
-- **Login rate limiting and security headers** (HSTS, CSP). Not done yet; they are the next
-  hardening step. Only the AI help has a per-user limit.
+- **Per-IP rate limiting and security headers** (HSTS, CSP). Accounts lock after 5 failed
+  logins, but there is no limit per IP address yet, and the response headers are Next.js
+  defaults. They are the next hardening step.
 - **Email notifications and SLA escalation.** They need background jobs. The app is one
   synchronous web service on purpose, with no queue or worker to run and pay for.
 - **Row-level permissions.** Agents see all tickets. Fine for one small team.
@@ -149,10 +166,21 @@ hand on the dev server and on Render.
 - **Re-encoding uploaded images.** The signature check reads the first bytes only. Files are
   never served from a public URL, which keeps the risk small.
 
+## Trade-offs made
+
+- **Migrations run in the start command.** Render's free plan has no pre-deploy step, so
+  `pnpm migrate` runs before `next start`. A failed migration stops the start and the
+  previous version keeps serving. The cost is a few seconds on each cold start.
+- **The AI help's rate limit lives in memory.** Enough for one free instance; more instances
+  would need a shared store.
+- **Uploads pass through the server once.** The browser sends the file straight to R2, but
+  the server still reads it back to check its content and make thumbnails, in a temporary
+  file deleted at the end of the request.
+
 ## With more time
 
 1. Integration tests against a Neon test branch, and a few Playwright tests for the admin.
-2. Login rate limiting and security headers.
+2. Per-IP rate limiting on login and security headers.
 3. A stored, indexed "overdue" flag kept up to date, so it can be filtered.
 4. GitHub OAuth, with an admin approving the role of each new user.
 5. A paid Render instance, to remove the cold start.

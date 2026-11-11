@@ -34,6 +34,8 @@ export default buildConfig({
     },
     meta: {
       titleSuffix: ' · Support',
+      // The app's own icon (src/app/favicon.ico) instead of Payload's logo.
+      icons: [{ rel: 'icon', type: 'image/x-icon', url: '/favicon.ico' }],
     },
     components: {
       // The "Field help" button on every admin page (AI help, POST /api/ai-help).

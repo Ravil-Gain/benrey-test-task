@@ -68,6 +68,8 @@ export const Tickets: CollectionConfig = {
       name: 'status',
       type: 'select',
       required: true,
+      // The list filters on it, and so does the bulk bar's "select all" query.
+      index: true,
       defaultValue: INITIAL_STATUS,
       options: TICKET_STATUSES.map((value) => ({ label: TICKET_STATUS_LABELS[value], value })),
       // The transition rules are checked in beforeTicketChange, not here. The form only
@@ -95,6 +97,8 @@ export const Tickets: CollectionConfig = {
       name: 'priority',
       type: 'select',
       required: true,
+      // The list filters and sorts on it.
+      index: true,
       defaultValue: 'normal',
       options: TICKET_PRIORITIES.map((value) => ({
         label: value.charAt(0).toUpperCase() + value.slice(1),
@@ -136,6 +140,8 @@ export const Tickets: CollectionConfig = {
     {
       name: 'dueAt',
       type: 'date',
+      // Sorting by due date and finding the tickets that are past it.
+      index: true,
       admin: {
         ...serverDate,
         description: `Set by the server when the ticket is created, from the priority: ${describeDueWindows()}.`,
