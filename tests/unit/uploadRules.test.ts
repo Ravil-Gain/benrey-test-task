@@ -51,7 +51,12 @@ describe('extensionMatches', () => {
 })
 
 describe('validateUpload', () => {
-  const valid = { filename: 'screenshot.png', mimetype: 'image/png', size: 1000, header: PNG_HEADER }
+  const valid = {
+    filename: 'screenshot.png',
+    mimetype: 'image/png',
+    size: 1000,
+    header: PNG_HEADER,
+  }
 
   it('passes a well-formed upload', () => {
     expect(validateUpload(valid)).toBeNull()
@@ -71,6 +76,8 @@ describe('validateUpload', () => {
   })
 
   it('rejects a PNG name carrying HTML bytes', () => {
-    expect(validateUpload({ ...valid, header: HTML_HEADER })).toBe('File content does not match its type.')
+    expect(validateUpload({ ...valid, header: HTML_HEADER })).toBe(
+      'File content does not match its type.',
+    )
   })
 })

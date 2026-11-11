@@ -13,7 +13,9 @@ describe('testDatabaseUrl', () => {
   })
 
   it('does not add the suffix twice', () => {
-    expect(new URL(testDatabaseUrl({ DATABASE_URL: DEV.replace('/neondb', '/neondb_test') })).pathname).toBe('/neondb_test')
+    expect(
+      new URL(testDatabaseUrl({ DATABASE_URL: DEV.replace('/neondb', '/neondb_test') })).pathname,
+    ).toBe('/neondb_test')
   })
 
   it('prefers TEST_DATABASE_URL when it is set', () => {

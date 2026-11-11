@@ -77,7 +77,11 @@ export interface Config {
     'payload-preferences': PayloadPreference;
     'payload-migrations': PayloadMigration;
   };
-  collectionsJoins: {};
+  collectionsJoins: {
+    customers: {
+      tickets: 'tickets';
+    };
+  };
   collectionsSelect: {
     users: UsersSelect<false> | UsersSelect<true>;
     customers: CustomersSelect<false> | CustomersSelect<true>;
@@ -134,7 +138,7 @@ export interface User {
    */
   name: string;
   /**
-   * Admin manages users, tags and deletes. Agent works on tickets and customers. A user with no role cannot open the admin. Only admins change roles.
+   * Admin manages users, tags and deletes. Agent works on tickets and customers. A user with no role cannot open the admin. Only admins change roles, and an admin cannot remove their own admin role.
    */
   roles?: ('admin' | 'agent')[] | null;
   updatedAt: string;
@@ -175,23 +179,14 @@ export interface Customer {
    * The organization the customer belongs to. Optional.
    */
   company?: string | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "tags".
- */
-export interface Tag {
-  id: number;
   /**
-   * A short label such as billing or outage, up to 40 characters. Each tag name is used once.
+   * The tickets this customer has opened, newest first.
    */
-  name: string;
-  /**
-   * Optional display color as a hex code, for example #1a2b3c.
-   */
-  color?: string | null;
+  tickets?: {
+    docs?: (number | Ticket)[];
+    hasNextPage?: boolean;
+    totalDocs?: number;
+  };
   updatedAt: string;
   createdAt: string;
 }
@@ -224,11 +219,11 @@ export interface Ticket {
     [k: string]: unknown;
   } | null;
   /**
-   * Every ticket starts as "New". "New" can move to "In progress" or "Closed". "In progress" can move to "Waiting for customer" or "Resolved". "Waiting for customer" can move to "In progress" or "Resolved". "Resolved" can move to "In progress" or "Closed". "Closed" is final. Moving to "In progress" needs an assignee.
+   * Every ticket starts as "New". "New" can move to "In progress" or "Closed". "In progress" can move to "Waiting for customer" or "Resolved". "Waiting for customer" can move to "In progress" or "Resolved". "Resolved" can move to "In progress" or "Closed". "Closed" is final. A ticket in "In progress" always has an assignee.
    */
   status: 'new' | 'in_progress' | 'waiting_customer' | 'resolved' | 'closed';
   /**
-   * How fast the ticket needs an answer. It sets the due date when the ticket is created: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours. Changing it later does not move the due date.
+   * How fast the ticket needs an answer, counted from when it was created: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours. Changing it moves the due date.
    */
   priority: 'low' | 'normal' | 'high' | 'urgent';
   /**
@@ -236,7 +231,7 @@ export interface Ticket {
    */
   customer: number | Customer;
   /**
-   * The agent who works on the ticket. Needed before the status can move to "In progress".
+   * The agent who works on the ticket. Required while the status is "In progress".
    */
   assignee?: (number | null) | User;
   /**
@@ -244,7 +239,7 @@ export interface Ticket {
    */
   tags?: (number | Tag)[] | null;
   /**
-   * Set by the server when the ticket is created, from the priority: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours.
+   * Set by the server from the priority and the creation time: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours.
    */
   dueAt?: string | null;
   /**
@@ -252,7 +247,7 @@ export interface Ticket {
    */
   isOverdue?: boolean | null;
   /**
-   * Set by the server when the status moves to "Resolved".
+   * Set by the server when the status moves to "Resolved", cleared when it is reopened.
    */
   resolvedAt?: string | null;
   /**
@@ -260,7 +255,7 @@ export interface Ticket {
    */
   closedAt?: string | null;
   /**
-   * Notes and replies on the ticket. Add and edit them right here. The server fills in the author and time.
+   * Notes and replies on the ticket. The server fills in the author and time. Only the author or an admin can edit or remove a comment.
    */
   comments?:
     | {
@@ -288,6 +283,23 @@ export interface Ticket {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "tags".
+ */
+export interface Tag {
+  id: number;
+  /**
+   * A short label such as billing or outage, up to 40 characters. Each tag name is used once.
+   */
+  name: string;
+  /**
+   * Optional display color as a hex code, for example #1a2b3c.
+   */
+  color?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "media".
  */
 export interface Media {
@@ -296,10 +308,6 @@ export interface Media {
    * A short text that says what the file shows, for screen readers. Up to 200 characters.
    */
   alt?: string | null;
-  /**
-   * The file name as uploaded. Set by the server.
-   */
-  originalName?: string | null;
   _objectKey?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -442,6 +450,7 @@ export interface CustomersSelect<T extends boolean = true> {
   name?: T;
   email?: T;
   company?: T;
+  tickets?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -489,7 +498,6 @@ export interface TicketsSelect<T extends boolean = true> {
  */
 export interface MediaSelect<T extends boolean = true> {
   alt?: T;
-  originalName?: T;
   _objectKey?: T;
   updatedAt?: T;
   createdAt?: T;

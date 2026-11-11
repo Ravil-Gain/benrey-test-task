@@ -2,31 +2,25 @@ import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/c
 
 import { env } from './env'
 
-// Used only to remove an object that the browser uploaded straight to R2 and that then
-// failed validation. Everything else goes through the storage plugin.
+// The S3 client settings for R2. Shared by the storage plugin, the CORS script and deleteFolder.
+export function r2ClientConfig() {
+  const r2 = env.r2()
+  return {
+    endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
+    region: 'auto',
+    credentials: { accessKeyId: r2.accessKeyId, secretAccessKey: r2.secretAccessKey },
+  }
+}
 
 let client: S3Client | undefined
 
-function r2Client(): S3Client {
-  if (!client) {
-    const r2 = env.r2()
-    client = new S3Client({
-      endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
-      region: 'auto',
-      credentials: { accessKeyId: r2.accessKeyId, secretAccessKey: r2.secretAccessKey },
-    })
-  }
-  return client
-}
-
-// Deletes every object under one upload folder. Each direct upload gets its own random
-// folder, so nothing else lives there. Deleting the folder avoids guessing the stored
-// file name, because Payload sanitizes the client's name before it is used as the key.
+// Deletes every object under one upload folder. Each direct upload gets its own random folder,
+// so this removes exactly one rejected upload without guessing its sanitized file name.
 export async function deleteFolder(folder: string): Promise<void> {
   if (!folder) {
     throw new Error('deleteFolder needs a non-empty folder')
   }
-  const client = r2Client()
+  client ??= new S3Client(r2ClientConfig())
   const Bucket = env.r2().bucket
   const Prefix = `${folder}/`
   let token: string | undefined

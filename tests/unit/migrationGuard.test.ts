@@ -6,7 +6,7 @@ describe('hasDevPush', () => {
   it('finds the dev-mode row, which Postgres returns with batch as a string', () => {
     expect(
       hasDevPush([
-        { name: '20261110_152856_initial', batch: '1' },
+        { name: '20261111_214315_initial', batch: '1' },
         { name: 'dev', batch: '-1' },
       ]),
     ).toBe(true)
@@ -14,12 +14,7 @@ describe('hasDevPush', () => {
   })
 
   it('passes a database that was only migrated', () => {
-    expect(
-      hasDevPush([
-        { name: '20261110_152856_initial', batch: '1' },
-        { name: '20261110_165322_media_original_name_roles', batch: 2 },
-      ]),
-    ).toBe(false)
+    expect(hasDevPush([{ name: '20261111_214315_initial', batch: '1' }])).toBe(false)
   })
 
   it('passes a fresh database and rows without a batch', () => {

@@ -1,4 +1,4 @@
-import { ValidationError } from 'payload'
+import { Forbidden, NotFound, ValidationError } from 'payload'
 import type { PayloadHandler } from 'payload'
 
 import { isStaff } from '../lib/access'
@@ -7,8 +7,8 @@ import { isTicketStatus } from '../lib/ticketStatus'
 
 // POST /api/tickets/bulk-status  { ids: number[], status: TicketStatus }
 //
-// Each ticket goes through payload.update with access control on, so the same
-// workflow hook runs for every one. A bad ticket lands in `failed` and the rest still update.
+// Each ticket goes through payload.update with access control on, so the workflow hook runs
+// for every one. A refused ticket lands in `failed` and the rest still update.
 export const bulkStatus: PayloadHandler = async (req) => {
   if (!req.user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
@@ -65,9 +65,16 @@ function isIdList(ids: unknown): ids is number[] {
   )
 }
 
+// The reason per ticket. Anything unexpected stays generic, so internals never reach the client.
 function describeError(error: unknown): string {
   if (error instanceof ValidationError) {
     return error.data.errors.map((item) => item.message).join('; ')
+  }
+  if (error instanceof NotFound) {
+    return 'Ticket not found'
+  }
+  if (error instanceof Forbidden) {
+    return 'Not allowed'
   }
   return 'Update failed'
 }

@@ -1,8 +1,6 @@
 // The CORS rule for the R2 bucket. No AWS SDK import, so the unit tests can run it directly.
-//
-// Browsers PUT files straight to R2 with a signed URL (ADR-022), so the bucket must allow
-// each origin the admin runs on. Nothing else: reads go through Payload's file route,
-// which is same-origin, so GET is not allowed from browsers.
+// Browsers PUT files straight to R2 with a signed URL, so the bucket must allow each origin
+// the admin runs on, and nothing else: reads go through Payload's same-origin file route.
 
 export type CorsRule = {
   AllowedOrigins: string[]
@@ -12,7 +10,6 @@ export type CorsRule = {
   MaxAgeSeconds: number
 }
 
-// Accepts "https://host[:port]" with no path. Returns the normalized origin.
 export function parseCorsOrigin(value: string): string {
   let url: URL
   try {

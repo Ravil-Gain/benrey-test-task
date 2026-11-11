@@ -1,13 +1,13 @@
 // The one call to Groq's chat completions API. `fetch` is passed in, so the unit tests can
-// run every outcome (answer, timeout, 429, 500, network error) without the network.
+// run every outcome without the network.
 
 import { AI_TIMEOUT_MS, readAnswer, type AiFailure, type ChatMessage } from './aiHelp'
 
 export const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-// Open-weight (Apache 2.0), the fastest and cheapest model in Groq's production list.
 export const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-20b'
 
-export type GroqResult = { ok: true; answer: string } | { ok: false; failure: AiFailure; status?: number }
+export type GroqResult =
+  { ok: true; answer: string } | { ok: false; failure: AiFailure; status?: number }
 
 export async function askGroq(input: {
   apiKey: string
@@ -25,10 +25,9 @@ export async function askGroq(input: {
         model: input.model,
         messages: input.messages,
         temperature: 0.2,
-        // Short answers. Reasoning tokens count too, so leave room for them.
+        // gpt-oss reasons before answering and those tokens count too. Low effort keeps the
+        // call inside the timeout; the reasoning itself is not returned.
         max_completion_tokens: 700,
-        // gpt-oss reasons before answering. Low effort keeps it inside the timeout, and the
-        // reasoning itself is not returned, only the answer.
         reasoning_effort: 'low',
         include_reasoning: false,
       }),
@@ -36,7 +35,10 @@ export async function askGroq(input: {
     })
   } catch (error) {
     const name = (error as { name?: unknown })?.name
-    return { ok: false, failure: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'unavailable' }
+    return {
+      ok: false,
+      failure: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'unavailable',
+    }
   }
 
   if (response.status === 429) {
@@ -49,7 +51,6 @@ export async function askGroq(input: {
   try {
     body = await response.json()
   } catch (error) {
-    // The timeout also covers reading the body.
     const name = (error as { name?: unknown })?.name
     const failure = name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'unavailable'
     return { ok: false, failure, status: response.status }

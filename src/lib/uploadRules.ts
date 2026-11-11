@@ -1,5 +1,4 @@
-// Upload rules for the media collection. No Payload import, so the unit tests can run them directly.
-// The checks look at the bytes that were actually stored, not only at what the client declared.
+// Upload rules for the media collection. No Payload import, so the unit tests run them directly.
 
 export const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -13,7 +12,7 @@ export type AllowedMime = (typeof ALLOWED_MIME_TYPES)[number]
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
-// How many leading bytes the signature check needs.
+// Leading bytes the signature check needs.
 export const SIGNATURE_BYTES = 16
 
 const EXTENSIONS_BY_MIME: Record<AllowedMime, string[]> = {
@@ -30,7 +29,6 @@ export function isAllowedMime(value: string): value is AllowedMime {
   return (ALLOWED_MIME_TYPES as readonly string[]).includes(value)
 }
 
-// "report.PDF" -> true for application/pdf. A name without an extension never matches.
 export function extensionMatches(mimetype: AllowedMime, filename: string): boolean {
   const dot = filename.lastIndexOf('.')
   if (dot < 0) {
@@ -39,7 +37,7 @@ export function extensionMatches(mimetype: AllowedMime, filename: string): boole
   return EXTENSIONS_BY_MIME[mimetype].includes(filename.slice(dot + 1).toLowerCase())
 }
 
-// Magic bytes: the first bytes that identify the real format.
+// Magic bytes: the first bytes identify the real format, whatever the client declared.
 export function matchesSignature(mimetype: AllowedMime, header: Uint8Array): boolean {
   switch (mimetype) {
     case 'image/jpeg':

@@ -10,7 +10,9 @@ export default async function setup(): Promise<void> {
   const testUrl = testDatabaseUrl(process.env)
   const name = databaseName(new URL(testUrl))
 
-  const admin = new pg.Client({ connectionString: maintenanceUrl(testUrl, process.env.DATABASE_URL ?? testUrl) })
+  const admin = new pg.Client({
+    connectionString: maintenanceUrl(testUrl, process.env.DATABASE_URL ?? testUrl),
+  })
   await admin.connect()
   try {
     const { rowCount } = await admin.query('select 1 from pg_database where datname = $1', [name])

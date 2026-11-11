@@ -6,7 +6,11 @@
 
 export const TEST_DATABASE_SUFFIX = '_test'
 
-export type DatabaseEnv = { DATABASE_URL?: string; TEST_DATABASE_URL?: string; [key: string]: string | undefined }
+export type DatabaseEnv = {
+  DATABASE_URL?: string
+  TEST_DATABASE_URL?: string
+  [key: string]: string | undefined
+}
 
 export function testDatabaseUrl(env: DatabaseEnv): string {
   const explicit = env.TEST_DATABASE_URL?.trim()
@@ -28,7 +32,9 @@ export function testDatabaseUrl(env: DatabaseEnv): string {
 export function assertTestDatabase(value: string): string {
   const name = databaseName(new URL(value))
   if (!name.endsWith(TEST_DATABASE_SUFFIX)) {
-    throw new Error(`Refusing to run integration tests on "${name}": the database name must end in "${TEST_DATABASE_SUFFIX}"`)
+    throw new Error(
+      `Refusing to run integration tests on "${name}": the database name must end in "${TEST_DATABASE_SUFFIX}"`,
+    )
   }
   return value
 }

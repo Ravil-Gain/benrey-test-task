@@ -17,7 +17,9 @@ function fakeReq(user: unknown, body: unknown) {
     json: async () => body,
     payload: {
       logger,
-      config: { collections: [{ slug: 'tickets', labels: { plural: 'Tickets' }, fields: Tickets.fields }] },
+      config: {
+        collections: [{ slug: 'tickets', labels: { plural: 'Tickets' }, fields: Tickets.fields }],
+      },
     },
   } as unknown as PayloadRequest
   return { req, logger }
@@ -25,7 +27,10 @@ function fakeReq(user: unknown, body: unknown) {
 
 async function call(req: PayloadRequest) {
   const response = await aiHelp(req)
-  return { status: response.status, body: (await response.json()) as { answer?: string; error?: string } }
+  return {
+    status: response.status,
+    body: (await response.json()) as { answer?: string; error?: string },
+  }
 }
 
 const groqAnswer = (content: string) =>
@@ -65,11 +70,15 @@ describe('POST /api/ai-help: answers', () => {
   it('sends the field reference and the question only, and returns the answer', async () => {
     const fetchMock = groqAnswer('Priority sets the due date.')
     vi.stubGlobal('fetch', fetchMock)
-    const { status, body } = await call(fakeReq(agent(), { question: 'What does priority do?', collection: 'tickets' }).req)
+    const { status, body } = await call(
+      fakeReq(agent(), { question: 'What does priority do?', collection: 'tickets' }).req,
+    )
 
     expect(status).toBe(200)
     expect(body).toEqual({ answer: 'Priority sets the due date.' })
-    const sent = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as { messages: { role: string; content: string }[] }
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as {
+      messages: { role: string; content: string }[]
+    }
     expect(sent.messages).toHaveLength(2)
     expect(sent.messages[0]!.content).toContain('Field reference for "Tickets"')
     expect(sent.messages[0]!.content).toContain('- Priority (priority, select, required)')
@@ -80,7 +89,9 @@ describe('POST /api/ai-help: answers', () => {
     const fetchMock = groqAnswer('ok')
     vi.stubGlobal('fetch', fetchMock)
     await call(fakeReq(agent(), { question: 'hi', collection: 'payload-preferences' }).req)
-    const sent = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as { messages: { content: string }[] }
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as {
+      messages: { content: string }[]
+    }
     expect(sent.messages[0]!.content).toContain('Field reference for "Tickets"')
   })
 })
@@ -97,23 +108,41 @@ describe('POST /api/ai-help: failures stay friendly', () => {
   })
 
   it.each([
-    ['a Groq error', async () => new Response('', { status: 500 }), 502, AI_FAILURE_MESSAGES.unavailable],
-    ['a Groq rate limit', async () => new Response('', { status: 429 }), 429, AI_FAILURE_MESSAGES.busy],
-    ['a network error', async () => Promise.reject(new TypeError('fetch failed')), 502, AI_FAILURE_MESSAGES.unavailable],
+    [
+      'a Groq error',
+      async () => new Response('', { status: 500 }),
+      502,
+      AI_FAILURE_MESSAGES.unavailable,
+    ],
+    [
+      'a Groq rate limit',
+      async () => new Response('', { status: 429 }),
+      429,
+      AI_FAILURE_MESSAGES.busy,
+    ],
+    [
+      'a network error',
+      async () => Promise.reject(new TypeError('fetch failed')),
+      502,
+      AI_FAILURE_MESSAGES.unavailable,
+    ],
     [
       'a timeout',
       async () => Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' })),
       504,
       AI_FAILURE_MESSAGES.timeout,
     ],
-  ])('answers %s with a message, and logs the outcome without the question', async (_case, impl, code, message) => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(impl as typeof fetch))
-    const { req, logger } = fakeReq(agent(), { question: 'secret question text' })
-    const { status, body } = await call(req)
-    expect(status).toBe(code)
-    expect(body).toEqual({ error: message })
-    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret question text')
-  })
+  ])(
+    'answers %s with a message, and logs the outcome without the question',
+    async (_case, impl, code, message) => {
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>(impl as typeof fetch))
+      const { req, logger } = fakeReq(agent(), { question: 'secret question text' })
+      const { status, body } = await call(req)
+      expect(status).toBe(code)
+      expect(body).toEqual({ error: message })
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret question text')
+    },
+  )
 
   it('limits one user to 10 questions a minute', async () => {
     vi.stubGlobal('fetch', groqAnswer('ok'))

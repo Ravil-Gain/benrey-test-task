@@ -2,18 +2,19 @@ import { ValidationError } from 'payload'
 import type { CollectionBeforeChangeHook } from 'payload'
 
 import type { Ticket } from '../payload-types'
+import { hasRole } from '../lib/access'
+import { stampComments, validateCommentChanges, type CommentRow } from '../lib/comments'
 import { computeDueAt, type TicketPriority } from '../lib/dueDate'
 import {
   INITIAL_STATUS,
+  OPEN_STATUSES,
+  validateAssignee,
   validateInitialStatus,
   validateStatusChange,
   type TicketStatus,
 } from '../lib/ticketStatus'
 
-type CommentRow = NonNullable<Ticket['comments']>[number]
-
-// The ticket rules. This runs on every write (admin, REST, local API, bulk endpoint),
-// so it does not matter where a change comes from.
+// The ticket rules, on every write path: admin, REST, local API, bulk endpoint and seed.
 export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
   data,
   originalDoc,
@@ -21,66 +22,66 @@ export const beforeTicketChange: CollectionBeforeChangeHook<Ticket> = ({
   req,
 }) => {
   const now = new Date()
-  const nowIso = now.toISOString()
-  const status = data.status as TicketStatus | undefined
+  const fail = (path: string, message: string) =>
+    new ValidationError({ collection: 'tickets', errors: [{ message, path }], req })
 
-  if (operation === 'create') {
-    // Every ticket starts as "New". Other statuses are reached through updates, where the
-    // transition map and the assignee guard apply.
-    const error = validateInitialStatus(status ?? INITIAL_STATUS)
+  const status = (data.status ?? originalDoc?.status ?? INITIAL_STATUS) as TicketStatus
+  const priority = (data.priority ?? originalDoc?.priority ?? 'normal') as TicketPriority
+  const assignee = 'assignee' in data ? data.assignee : originalDoc?.assignee
+
+  if (operation === 'create' || !originalDoc) {
+    const error = validateInitialStatus(status)
     if (error) {
-      throw new ValidationError({
-        collection: 'tickets',
-        errors: [{ message: error, path: 'status' }],
-        req,
-      })
+      throw fail('status', error)
     }
-    const priority = (data.priority ?? 'normal') as TicketPriority
-    data.dueAt = computeDueAt(priority, now).toISOString()
-  }
-
-  if (operation === 'update' && originalDoc && status && status !== originalDoc.status) {
-    const hasAssignee = 'assignee' in data ? Boolean(data.assignee) : Boolean(originalDoc.assignee)
-    const error = validateStatusChange({
-      from: originalDoc.status as TicketStatus,
-      to: status,
-      hasAssignee,
-    })
-    if (error) {
-      throw new ValidationError({
-        collection: 'tickets',
-        errors: [{ message: error, path: 'status' }],
-        req,
-      })
+    const createdAt = data.createdAt ? new Date(data.createdAt) : now
+    data.dueAt = computeDueAt(priority, createdAt).toISOString()
+    data.resolvedAt = null
+    data.closedAt = null
+  } else {
+    if (status !== originalDoc.status) {
+      const error = validateStatusChange({ from: originalDoc.status as TicketStatus, to: status })
+      if (error) {
+        throw fail('status', error)
+      }
+      if (status === 'resolved') {
+        data.resolvedAt = now.toISOString()
+      } else if (originalDoc.status === 'resolved' && OPEN_STATUSES.includes(status)) {
+        data.resolvedAt = null // reopened
+      }
+      if (status === 'closed') {
+        data.closedAt = now.toISOString()
+      }
+    }
+    if (priority !== originalDoc.priority) {
+      data.dueAt = computeDueAt(priority, new Date(originalDoc.createdAt)).toISOString()
     }
   }
 
-  // Stamp the time when a ticket enters resolved or closed.
-  const enteredStatus = operation === 'update' && status && status !== originalDoc?.status
-  if (enteredStatus && status === 'resolved') {
-    data.resolvedAt = nowIso
-  }
-  if (enteredStatus && status === 'closed') {
-    data.closedAt = nowIso
+  const assigneeError = validateAssignee({ status, hasAssignee: Boolean(assignee) })
+  if (assigneeError) {
+    throw fail(status === originalDoc?.status ? 'assignee' : 'status', assigneeError)
   }
 
-  // Comment authors and times come from the server, not the client.
-  // Rows that already exist keep their original author and time.
   if (Array.isArray(data.comments)) {
-    const existing = new Map<string, CommentRow>()
-    for (const row of originalDoc?.comments ?? []) {
-      if (row.id) {
-        existing.set(row.id, row)
-      }
-    }
-    data.comments = data.comments.map((row) => {
-      const old = row.id ? existing.get(row.id) : undefined
-      return {
-        ...row,
-        author: old?.author ?? req.user?.id ?? row.author,
-        createdAt: old?.createdAt ?? nowIso,
-      }
+    const before = (originalDoc?.comments ?? []) as CommentRow[]
+    const after = data.comments as CommentRow[]
+    const userId = typeof req.user?.id === 'number' ? req.user.id : undefined
+    const error = validateCommentChanges({
+      before,
+      after,
+      userId,
+      isAdmin: hasRole(req.user, 'admin'),
     })
+    if (error) {
+      throw fail('comments', error)
+    }
+    data.comments = stampComments({
+      before,
+      after,
+      userId,
+      now: now.toISOString(),
+    }) as Ticket['comments']
   }
 
   return data

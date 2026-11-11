@@ -20,14 +20,23 @@ async function call(user: unknown, body: unknown) {
   const req = await createLocalReq({ user: user as never }, f.payload)
   req.json = async () => body
   const response = await bulkStatus(req)
-  return { status: response.status, body: (await response.json()) as { updated?: number; failed?: { id: number; error: string }[] } }
+  return {
+    status: response.status,
+    body: (await response.json()) as { updated?: number; failed?: { id: number; error: string }[] },
+  }
 }
 
 async function ticket(data: Record<string, unknown>) {
   const created = await f.payload.create({
     collection: 'tickets',
     overrideAccess: true,
-    data: { subject: 'Bulk check ticket', customer: f.customer, status: 'new', priority: 'normal', ...data },
+    data: {
+      subject: 'Bulk check ticket',
+      customer: f.customer,
+      status: 'new',
+      priority: 'normal',
+      ...data,
+    },
   })
   return created.id as number
 }
@@ -37,9 +46,17 @@ describe('POST /api/tickets/bulk-status', () => {
     const assigned = await ticket({ assignee: f.agent.id })
     const unassigned = await ticket({})
     const closed = await ticket({})
-    await f.payload.update({ collection: 'tickets', id: closed, data: { status: 'closed' }, overrideAccess: true })
+    await f.payload.update({
+      collection: 'tickets',
+      id: closed,
+      data: { status: 'closed' },
+      overrideAccess: true,
+    })
 
-    const { status, body } = await call(f.agent, { ids: [assigned, unassigned, closed], status: 'in_progress' })
+    const { status, body } = await call(f.agent, {
+      ids: [assigned, unassigned, closed],
+      status: 'in_progress',
+    })
 
     expect(status).toBe(200)
     expect(body.updated).toBe(1)
@@ -68,6 +85,6 @@ describe('POST /api/tickets/bulk-status', () => {
     const id = await ticket({ assignee: f.agent.id })
     const { body } = await call(f.admin, { ids: [id, 999_999_999], status: 'in_progress' })
     expect(body.updated).toBe(1)
-    expect(body.failed).toEqual([{ id: 999_999_999, error: 'Update failed' }])
+    expect(body.failed).toEqual([{ id: 999_999_999, error: 'Ticket not found' }])
   })
 })

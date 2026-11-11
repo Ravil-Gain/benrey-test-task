@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { AI_TIMEOUT_MS } from '../../src/lib/aiHelp'
 import { askGroq, DEFAULT_GROQ_MODEL, GROQ_URL } from '../../src/lib/groq'
 
 const messages = [
@@ -9,7 +8,13 @@ const messages = [
 ]
 
 function call(fetchImpl: typeof fetch, timeoutMs?: number) {
-  return askGroq({ apiKey: 'test-key', model: DEFAULT_GROQ_MODEL, messages, fetch: fetchImpl, timeoutMs })
+  return askGroq({
+    apiKey: 'test-key',
+    model: DEFAULT_GROQ_MODEL,
+    messages,
+    fetch: fetchImpl,
+    timeoutMs,
+  })
 }
 
 describe('askGroq', () => {
@@ -43,18 +48,20 @@ describe('askGroq', () => {
     expect(await call(slow, 20)).toEqual({ ok: false, failure: 'timeout' })
   })
 
-  it('uses a 10 second timeout by default', () => {
-    expect(AI_TIMEOUT_MS).toBe(10_000)
-  })
-
   it('maps a 429 to busy and other errors to unavailable', async () => {
-    expect(await call(async () => new Response('', { status: 429 }))).toEqual({ ok: false, failure: 'busy', status: 429 })
+    expect(await call(async () => new Response('', { status: 429 }))).toEqual({
+      ok: false,
+      failure: 'busy',
+      status: 429,
+    })
     expect(await call(async () => new Response('', { status: 500 }))).toEqual({
       ok: false,
       failure: 'unavailable',
       status: 500,
     })
-    expect(await call(async () => new Response('', { status: 401 }))).toMatchObject({ failure: 'unavailable' })
+    expect(await call(async () => new Response('', { status: 401 }))).toMatchObject({
+      failure: 'unavailable',
+    })
   })
 
   it('maps a network error and a broken body to unavailable', async () => {
@@ -68,7 +75,9 @@ describe('askGroq', () => {
   })
 
   it('reports an empty answer', async () => {
-    expect(await call(async () => Response.json({ choices: [{ message: { content: '' } }] }))).toEqual({
+    expect(
+      await call(async () => Response.json({ choices: [{ message: { content: '' } }] })),
+    ).toEqual({
       ok: false,
       failure: 'empty',
     })

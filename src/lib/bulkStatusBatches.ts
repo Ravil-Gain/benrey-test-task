@@ -1,26 +1,27 @@
 // Client-side plumbing for the bulk status bar. No Payload import, so the admin component and
-// the unit tests can both use it. It decides nothing about which status changes are allowed:
-// the endpoint applies src/lib/ticketStatus.ts to every ticket and reports the ones it refused.
+// the unit tests can both use it. It decides nothing about which moves are allowed: the
+// endpoint applies ticketStatus.ts to every ticket and reports the ones it refused.
 
-// The endpoint refuses more than this many ids in one request.
 export const MAX_BULK_SIZE = 500
 
-// The bar sends ids in batches of this size, so it can show progress and no single request
-// runs long on the free Render instance.
+// Ids go to the endpoint in batches of this size, so the bar can show progress and no single
+// request runs long on the free instance.
 export const BULK_BATCH_SIZE = 100
 
-// "Select all" across pages selects the list query, not ids. Payload's query helper keeps the
-// URL filters but drops the search box, so the search is added back as the same `like` filter
-// the list uses on `subject` (listSearchableFields). Returns undefined without a search.
-export function searchFilter(search: string | null | undefined): { subject: { like: string } } | undefined {
+// "Select all" across pages selects the list query without its search box. This rebuilds the
+// search the same way Payload does (a `like` on each searchable field) so it can be added back.
+export function searchFilter(
+  search: string | null | undefined,
+  fields: readonly string[],
+): { or: Record<string, { like: string }>[] } | undefined {
   const value = search?.trim()
-  return value ? { subject: { like: value } } : undefined
+  return value ? { or: fields.map((field) => ({ [field]: { like: value } })) } : undefined
 }
 
 export type BulkFailure = { id: number; error: string }
 export type BulkResult = { updated: number; failed: BulkFailure[] }
 
-// Selection ids come from the list as numbers or strings. Keeps positive integers, once each.
+// Selection ids arrive as numbers or strings. Keeps positive integers, once each.
 export function toTicketIds(raw: readonly (number | string)[]): number[] {
   const ids = new Set<number>()
   for (const value of raw) {
@@ -50,14 +51,16 @@ export function mergeBulkResults(results: readonly BulkResult[]): BulkResult {
   }
 }
 
-// A batch the server refused as a whole (network error, 401, 403, 400): every id in it failed
-// with the same reason, so the summary still accounts for each ticket.
+// A batch the server refused as a whole: every id in it failed with the same reason.
 export function failBatch(ids: readonly number[], error: string): BulkResult {
   return { updated: 0, failed: ids.map((id) => ({ id, error })) }
 }
 
-// Reads the endpoint's JSON. Anything that is not the expected shape counts as a failed batch.
-export function parseBulkResponse(ids: readonly number[], status: number, body: unknown): BulkResult {
+export function parseBulkResponse(
+  ids: readonly number[],
+  status: number,
+  body: unknown,
+): BulkResult {
   const data = (body ?? {}) as { updated?: unknown; failed?: unknown; error?: unknown }
   if (status !== 200) {
     const reason = typeof data.error === 'string' ? data.error : `Request failed (HTTP ${status})`
@@ -77,7 +80,6 @@ export function parseBulkResponse(ids: readonly number[], status: number, body: 
 
 export type BulkSummary = { kind: 'success' | 'partial' | 'error'; message: string }
 
-// One line for the toast. The failed tickets themselves are listed under the bar.
 export function summarizeBulk(result: BulkResult, statusLabel: string): BulkSummary {
   const failed = result.failed.length
   const tickets = (count: number) => `${count} ticket${count === 1 ? '' : 's'}`
@@ -85,7 +87,10 @@ export function summarizeBulk(result: BulkResult, statusLabel: string): BulkSumm
     return { kind: 'success', message: `${tickets(result.updated)} moved to "${statusLabel}".` }
   }
   if (result.updated === 0) {
-    return { kind: 'error', message: `No tickets changed. ${tickets(failed)} could not move to "${statusLabel}".` }
+    return {
+      kind: 'error',
+      message: `No tickets changed. ${tickets(failed)} could not move to "${statusLabel}".`,
+    }
   }
   return {
     kind: 'partial',
@@ -93,7 +98,7 @@ export function summarizeBulk(result: BulkResult, statusLabel: string): BulkSumm
   }
 }
 
-// Groups failures by reason, so 300 identical refusals read as one line with a count.
+// Groups failures by reason, largest group first, so 300 identical refusals read as one line.
 export function groupFailures(failed: readonly BulkFailure[]): { error: string; ids: number[] }[] {
   const groups = new Map<string, number[]>()
   for (const { id, error } of failed) {

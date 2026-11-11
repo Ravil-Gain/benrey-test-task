@@ -1,4 +1,4 @@
-import { ValidationError } from 'payload'
+import { Forbidden, NotFound, ValidationError } from 'payload'
 import type { PayloadRequest } from 'payload'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -8,12 +8,18 @@ import { MAX_BULK_SIZE } from '../../src/lib/bulkStatusBatches'
 const admin = { id: 1, roles: ['admin'] }
 const agent = { id: 2, roles: ['agent'] }
 
-// A fake request: the caller, the JSON body, and payload.update.
 type Update = (args: { id: number }) => Promise<unknown>
 
+// A fake request: the caller, the JSON body, and payload.update.
 function fakeReq(user: unknown, body: unknown, update = vi.fn<Update>(async () => ({}))) {
-  const json = body instanceof Error ? vi.fn(async () => Promise.reject(body)) : vi.fn(async () => body)
-  const req = { user, json, payload: { update } } as unknown as PayloadRequest
+  const json =
+    body instanceof Error ? vi.fn(async () => Promise.reject(body)) : vi.fn(async () => body)
+  const req = {
+    user,
+    json,
+    payload: { update },
+    t: (key: string) => key,
+  } as unknown as PayloadRequest
   return { req, update }
 }
 
@@ -23,16 +29,13 @@ async function call(req: PayloadRequest) {
 }
 
 describe('POST /api/tickets/bulk-status: who may call it', () => {
-  it('refuses a logged-out caller with 401', async () => {
-    const { req, update } = fakeReq(null, { ids: [1], status: 'closed' })
-    expect((await call(req)).status).toBe(401)
-    expect(update).not.toHaveBeenCalled()
-  })
-
-  it('refuses a user without a staff role with 403', async () => {
-    const { req, update } = fakeReq({ id: 3, roles: [] }, { ids: [1], status: 'closed' })
-    expect((await call(req)).status).toBe(403)
-    expect(update).not.toHaveBeenCalled()
+  it('refuses a logged-out caller with 401 and a user without a staff role with 403', async () => {
+    const anonymous = fakeReq(null, { ids: [1], status: 'closed' })
+    expect((await call(anonymous.req)).status).toBe(401)
+    const noRole = fakeReq({ id: 3, roles: [] }, { ids: [1], status: 'closed' })
+    expect((await call(noRole.req)).status).toBe(403)
+    expect(anonymous.update).not.toHaveBeenCalled()
+    expect(noRole.update).not.toHaveBeenCalled()
   })
 
   it('accepts agents and admins', async () => {
@@ -50,7 +53,10 @@ describe('POST /api/tickets/bulk-status: request validation', () => {
     ['an empty id list', { ids: [], status: 'closed' }],
     ['a non-integer id', { ids: [1, 'x'], status: 'closed' }],
     ['a zero id', { ids: [0], status: 'closed' }],
-    ['more ids than the limit', { ids: Array.from({ length: MAX_BULK_SIZE + 1 }, (_, i) => i + 1), status: 'closed' }],
+    [
+      'more ids than the limit',
+      { ids: Array.from({ length: MAX_BULK_SIZE + 1 }, (_, i) => i + 1), status: 'closed' },
+    ],
     ['an unknown status', { ids: [1], status: 'open' }],
   ])('answers 400 for %s', async (_case, body) => {
     const { req, update } = fakeReq(admin, body)
@@ -80,31 +86,34 @@ describe('POST /api/tickets/bulk-status: per-ticket results', () => {
     expect(update).toHaveBeenCalledTimes(2)
   })
 
-  it('reports refused transitions per ticket and still updates the rest', async () => {
+  it('reports each failure with its reason and still updates the rest', async () => {
     const update = vi.fn(async ({ id }: { id: number }) => {
       if (id === 7) {
         throw new ValidationError({
           collection: 'tickets',
-          errors: [{ message: 'Cannot change status from "closed" to "new".', path: 'status' }],
+          errors: [
+            { message: 'Cannot change status from "Closed" to "In progress".', path: 'status' },
+          ],
         })
       }
-      if (id === 8) {
-        throw new Error('connection reset')
-      }
+      if (id === 8) throw new Error('connection reset: secret details')
+      if (id === 9) throw new NotFound()
+      if (id === 10) throw new Forbidden()
       return {}
     })
-    const { req } = fakeReq(admin, { ids: [6, 7, 8, 9], status: 'new' }, update)
+    const { req } = fakeReq(admin, { ids: [6, 7, 8, 9, 10, 11], status: 'in_progress' }, update)
     const { status, body } = await call(req)
 
     expect(status).toBe(200)
     expect(body).toEqual({
       updated: 2,
       failed: [
-        { id: 7, error: 'Cannot change status from "closed" to "new".' },
-        // Other errors are not passed to the client as is.
+        { id: 7, error: 'Cannot change status from "Closed" to "In progress".' },
         { id: 8, error: 'Update failed' },
+        { id: 9, error: 'Ticket not found' },
+        { id: 10, error: 'Not allowed' },
       ],
     })
-    expect(update).toHaveBeenCalledTimes(4)
+    expect(update).toHaveBeenCalledTimes(6)
   })
 })

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 
 import { env } from './lib/env'
 import { isStaff } from './lib/access'
+import { r2ClientConfig } from './lib/r2'
 import { MAX_UPLOAD_BYTES } from './lib/uploadRules'
 import { Customers } from './collections/Customers'
 import { Media } from './collections/Media'
@@ -15,81 +16,56 @@ import { Tags } from './collections/Tags'
 import { Tickets } from './collections/Tickets'
 import { Users } from './collections/Users'
 import { aiHelp } from './endpoints/aiHelp'
-import { rememberOriginalNames } from './plugins/rememberOriginalNames'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-
-const r2 = env.r2()
 const serverURL = env.serverUrl()
 
 export default buildConfig({
   serverURL,
-  // Payload refuses cookie requests from origins not on this list. Its default list
-  // is empty, which switches that check off, so we set it ourselves.
+  // Payload's default allowlist is empty, which turns the origin check off.
   csrf: [serverURL],
   admin: {
     user: Users.slug,
-    importMap: {
-      baseDir: here,
-    },
+    importMap: { baseDir: here },
     meta: {
       titleSuffix: ' · Support',
-      // The app's own icon (src/app/favicon.ico) instead of Payload's logo.
       icons: [{ rel: 'icon', type: 'image/x-icon', url: '/favicon.ico' }],
     },
     components: {
-      // The "Field help" button on every admin page (AI help, POST /api/ai-help).
-      providers: ['/components/AiHelp#AiHelpProvider'],
+      // The "Field help" button in the admin header (POST /api/ai-help).
+      actions: ['/components/AiHelp#AiHelp'],
     },
   },
-  // Custom endpoints that belong to no collection.
   endpoints: [{ path: '/ai-help', method: 'post', handler: aiHelp }],
   collections: [Users, Customers, Tags, Tickets, Media],
-  // Size limit for every upload, including the signed URLs for direct uploads.
   upload: {
-    limits: {
-      fileSize: MAX_UPLOAD_BYTES,
-    },
+    limits: { fileSize: MAX_UPLOAD_BYTES },
   },
   editor: lexicalEditor(),
   secret: env.payloadSecret(),
   db: postgresAdapter({
     pool: {
       connectionString: env.databaseUrl(),
-      // Stops idle connections from being dropped silently.
       keepAlive: true,
     },
-    // Schema changes go through migrations only. Never auto-sync.
+    // Schema changes go through committed migrations only.
     push: false,
   }),
   onInit: (payload) => {
-    // Without this listener, one failed idle connection crashes the whole process.
+    // Without a listener, one failed idle connection crashes the whole process.
     payload.db.pool.on('error', (error) => {
-      console.error('[db] idle connection error, the pool will reconnect:', error.message)
+      payload.logger.error({ err: error }, '[db] idle connection error, the pool will reconnect')
     })
   },
   plugins: [
-    // Private R2 bucket. Files are only read through Payload's access-checked route.
-    // Browsers upload straight to R2 with a signed URL. Only staff can get one.
+    // Private R2 bucket. Browsers upload straight to it with a signed URL (staff only), and
+    // files are read back only through Payload's access-checked route.
     s3Storage({
-      collections: {
-        media: true,
-      },
-      clientUploads: {
-        access: ({ req }) => isStaff({ req }),
-      },
-      bucket: r2.bucket,
-      config: {
-        endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
-        region: 'auto',
-        credentials: {
-          accessKeyId: r2.accessKeyId,
-          secretAccessKey: r2.secretAccessKey,
-        },
-      },
+      collections: { media: true },
+      clientUploads: { access: ({ req }) => isStaff({ req }) },
+      bucket: env.r2().bucket,
+      config: r2ClientConfig(),
     }),
-    // Must come after s3Storage: wraps its signed-URL endpoint to keep the uploader's file name.
-    rememberOriginalNames,
   ],
   sharp,
   typescript: {

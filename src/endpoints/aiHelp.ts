@@ -18,8 +18,7 @@ const limiter = createRateLimiter({ limit: 10, windowMs: 60_000 })
 // POST /api/ai-help  { question: string, collection?: string }
 //
 // Answers "what does this field mean / how do I fill this in" from the collection's field
-// metadata only. Staff only, checked here on the server. A failure of the AI never becomes
-// an error page: the reply is a friendly message the widget shows.
+// metadata only. Staff only. A failure of the AI becomes a friendly message, never an error page.
 export const aiHelp: PayloadHandler = async (req) => {
   if (!req.user) {
     return Response.json({ error: 'Log in to use the AI help.' }, { status: 401 })
@@ -40,7 +39,10 @@ export const aiHelp: PayloadHandler = async (req) => {
   }
 
   if (!limiter.allow(String(req.user.id), Date.now())) {
-    return Response.json({ error: 'You asked a lot in a short time. Wait a minute and try again.' }, { status: 429 })
+    return Response.json(
+      { error: 'You asked a lot in a short time. Wait a minute and try again.' },
+      { status: 429 },
+    )
   }
 
   const apiKey = env.groqApiKey()
@@ -61,8 +63,11 @@ export const aiHelp: PayloadHandler = async (req) => {
     fetch,
   })
   if (!result.ok) {
-    // Logs the outcome only. The question is not logged.
-    req.payload.logger.warn({ failure: result.failure, status: result.status }, '[ai-help] no answer')
+    // The outcome only. The question is never logged.
+    req.payload.logger.warn(
+      { failure: result.failure, status: result.status },
+      '[ai-help] no answer',
+    )
     const status = result.failure === 'timeout' ? 504 : result.failure === 'busy' ? 429 : 502
     return Response.json({ error: AI_FAILURE_MESSAGES[result.failure] }, { status })
   }

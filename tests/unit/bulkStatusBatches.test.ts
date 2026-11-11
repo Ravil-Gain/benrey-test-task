@@ -12,18 +12,23 @@ import {
   summarizeBulk,
   toTicketIds,
 } from '../../src/lib/bulkStatusBatches'
-import { TICKET_STATUS_LABELS, TICKET_STATUSES } from '../../src/lib/ticketStatus'
 
 describe('searchFilter', () => {
-  it('turns the list search into the same subject filter the list uses', () => {
-    expect(searchFilter('SSO')).toEqual({ subject: { like: 'SSO' } })
-    expect(searchFilter('  login loop ')).toEqual({ subject: { like: 'login loop' } })
+  const fields = ['subject', 'customer.name']
+
+  it('turns the list search into the same or-of-likes the list uses', () => {
+    expect(searchFilter('SSO', fields)).toEqual({
+      or: [{ subject: { like: 'SSO' } }, { 'customer.name': { like: 'SSO' } }],
+    })
+    expect(searchFilter('  login loop ', ['subject'])).toEqual({
+      or: [{ subject: { like: 'login loop' } }],
+    })
   })
 
   it('adds nothing without a search, so the whole filtered list is selected', () => {
-    expect(searchFilter(null)).toBeUndefined()
-    expect(searchFilter(undefined)).toBeUndefined()
-    expect(searchFilter('   ')).toBeUndefined()
+    expect(searchFilter(null, fields)).toBeUndefined()
+    expect(searchFilter(undefined, fields)).toBeUndefined()
+    expect(searchFilter('   ', fields)).toBeUndefined()
   })
 })
 
@@ -62,7 +67,10 @@ describe('parseBulkResponse', () => {
 
   it('reads a 200 with per-ticket failures', () => {
     expect(
-      parseBulkResponse(ids, 200, { updated: 2, failed: [{ id: 3, error: 'Cannot change status.' }] }),
+      parseBulkResponse(ids, 200, {
+        updated: 2,
+        failed: [{ id: 3, error: 'Cannot change status.' }],
+      }),
     ).toEqual({ updated: 2, failed: [{ id: 3, error: 'Cannot change status.' }] })
   })
 
@@ -78,7 +86,9 @@ describe('parseBulkResponse', () => {
   })
 
   it('skips malformed failure entries and fills in a missing reason', () => {
-    expect(parseBulkResponse(ids, 200, { updated: 1, failed: [{ id: 2 }, { error: 'x' }, null] })).toEqual({
+    expect(
+      parseBulkResponse(ids, 200, { updated: 1, failed: [{ id: 2 }, { error: 'x' }, null] }),
+    ).toEqual({
       updated: 1,
       failed: [{ id: 2, error: 'Update failed' }],
     })
@@ -134,11 +144,5 @@ describe('groupFailures', () => {
       { error: 'needs assignee', ids: [2, 3] },
       { error: 'closed is final', ids: [1] },
     ])
-  })
-})
-
-describe('TICKET_STATUS_LABELS', () => {
-  it('has a label for every status', () => {
-    expect(Object.keys(TICKET_STATUS_LABELS).sort()).toEqual([...TICKET_STATUSES].sort())
   })
 })

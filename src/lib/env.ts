@@ -1,8 +1,10 @@
-// Reads settings from environment variables. A missing one throws with its name,
-// so a broken deploy fails at startup. We never fall back to local disk or a default password.
+// Settings come from environment variables only. A missing one throws with its name, so a
+// broken deploy fails at startup instead of falling back to a default.
 
-function required(name: string): string {
-  const value = process.env[name]?.trim()
+export type EnvSource = Record<string, string | undefined>
+
+export function requireEnv(name: string, source: EnvSource = process.env): string {
+  const value = source[name]?.trim()
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`)
   }
@@ -11,10 +13,8 @@ function required(name: string): string {
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
 
-// Turns the configured public address into a bare origin ("https://host[:port]").
-// It is the CSRF allowlist, which compares origins, so a path, query or hash would
-// never match and is refused. In production the origin must be https, except on a
-// local host (a production build started on this machine with `pnpm start`).
+// The public address as a bare origin. It is also the CSRF allowlist, which compares origins,
+// so a path or query would never match. Production must use https, except on a local host.
 export function parseServerOrigin(value: string, nodeEnv: string | undefined): string {
   let url: URL
   try {
@@ -26,7 +26,9 @@ export function parseServerOrigin(value: string, nodeEnv: string | undefined): s
     throw new Error('PAYLOAD_PUBLIC_SERVER_URL must start with http:// or https://')
   }
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
-    throw new Error('PAYLOAD_PUBLIC_SERVER_URL must be an origin only, with no path, query or login')
+    throw new Error(
+      'PAYLOAD_PUBLIC_SERVER_URL must be an origin only, with no path, query or login',
+    )
   }
   if (nodeEnv === 'production' && url.protocol !== 'https:' && !LOCAL_HOSTS.has(url.hostname)) {
     throw new Error('PAYLOAD_PUBLIC_SERVER_URL must use https:// in production')
@@ -35,24 +37,21 @@ export function parseServerOrigin(value: string, nodeEnv: string | undefined): s
 }
 
 // Session cookies get the Secure flag whenever the app is served over https.
-// Payload's default is Secure off.
-export function useSecureCookies(serverOrigin: string): boolean {
+export function isHttpsOrigin(serverOrigin: string): boolean {
   return serverOrigin.startsWith('https://')
 }
 
 export const env = {
-  databaseUrl: () => required('DATABASE_URL'),
-  payloadSecret: () => required('PAYLOAD_SECRET'),
-  // The public address of the app, e.g. http://localhost:3000 or the Render URL.
-  serverUrl: () => parseServerOrigin(required('PAYLOAD_PUBLIC_SERVER_URL'), process.env.NODE_ENV),
-  // Optional. Without a key the AI field help answers "not set up" and the admin keeps
-  // working, so a missing key must not stop the app from starting.
+  databaseUrl: () => requireEnv('DATABASE_URL'),
+  payloadSecret: () => requireEnv('PAYLOAD_SECRET'),
+  serverUrl: () => parseServerOrigin(requireEnv('PAYLOAD_PUBLIC_SERVER_URL'), process.env.NODE_ENV),
+  // Optional: without a key the AI help answers "not set up" and the admin keeps working.
   groqApiKey: (): string | null => process.env.GROQ_API_KEY?.trim() || null,
   groqModel: (): string | null => process.env.GROQ_MODEL?.trim() || null,
   r2: () => ({
-    accountId: required('R2_ACCOUNT_ID'),
-    bucket: required('R2_BUCKET'),
-    accessKeyId: required('R2_ACCESS_KEY_ID'),
-    secretAccessKey: required('R2_SECRET_ACCESS_KEY'),
+    accountId: requireEnv('R2_ACCOUNT_ID'),
+    bucket: requireEnv('R2_BUCKET'),
+    accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
+    secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
   }),
 }

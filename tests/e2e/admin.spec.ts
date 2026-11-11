@@ -1,8 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
 
 // Seeded accounts (pnpm seed). The agent is the first seeded agent.
-const ADMIN = { email: process.env.SEED_ADMIN_EMAIL ?? '', password: process.env.SEED_ADMIN_PASSWORD ?? '' }
-const AGENT = { email: 'anna.lindqvist@support.example.test', password: process.env.SEED_AGENT_PASSWORD ?? '' }
+const ADMIN = {
+  email: process.env.SEED_ADMIN_EMAIL ?? '',
+  password: process.env.SEED_ADMIN_PASSWORD ?? '',
+}
+const AGENT = {
+  email: 'anna.lindqvist@support.example.test',
+  password: process.env.SEED_AGENT_PASSWORD ?? '',
+}
 
 async function login(page: Page, account: { email: string; password: string }) {
   test.skip(!account.email || !account.password, 'Seed credentials are not set in .env')
@@ -58,7 +64,9 @@ test.describe('admin', () => {
   test('the ticket status field offers only the allowed next statuses', async ({ page }) => {
     await page.goto('/admin/collections/tickets?limit=1&where[status][equals]=new')
     await page.locator('tbody tr a').first().click()
-    await expect(page.getByText('From "New" the ticket can move to "In progress" or "Closed".')).toBeVisible()
+    await expect(
+      page.getByText('From "New" the ticket can move to "In progress" or "Closed".'),
+    ).toBeVisible()
   })
 
   test('the create form shows the status as New, read-only', async ({ page }) => {
@@ -78,6 +86,26 @@ test.describe('admin', () => {
     await expect(dialog).toContainText('Field help: Tickets')
     await dialog.getByRole('textbox').fill('What is priority?')
     await expect(dialog).toContainText('17 / 500')
+  })
+
+  test('the overdue button filters the list to open tickets past their due date', async ({
+    page,
+  }) => {
+    await page.goto('/admin/collections/tickets?limit=10')
+    await page.getByRole('button', { name: 'Show overdue tickets' }).click()
+    await expect(page).toHaveURL(/dueAt/)
+    await expect(page).toHaveURL(/waiting_customer/)
+    await expect(page.locator('tbody tr').first()).toBeVisible()
+  })
+
+  test('a customer page lists its tickets', async ({ page }) => {
+    await page.goto('/admin/collections/customers?limit=1')
+    await page.locator('tbody tr a').first().click()
+    await page.waitForURL(/\/collections\/customers\/\d+/)
+    await expect(
+      page.getByText('The tickets this customer has opened, newest first.'),
+    ).toBeVisible()
+    await expect(page.locator('.field-type.join')).toBeVisible()
   })
 })
 

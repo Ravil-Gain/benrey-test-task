@@ -1,9 +1,10 @@
+import { randomBytes } from 'crypto'
 import sharp from 'sharp'
 import type { Payload } from 'payload'
 
 import type { Ticket } from '../payload-types'
 import type { TicketPriority } from '../lib/dueDate'
-import { INITIAL_STATUS, statusPath, type TicketStatus } from '../lib/ticketStatus'
+import { INITIAL_STATUS, OPEN_STATUSES, type TicketStatus } from '../lib/ticketStatus'
 import { createRandom, type Random } from './random'
 import {
   AGENT_NAMES,
@@ -18,14 +19,23 @@ import {
 } from './data'
 import type { SeedOptions } from './options'
 
-const SEED = 20261110 // same seed every run, so bugs on demo data can be reproduced
+const SEED = 20261110 // the same seed every run, so bugs on demo data can be reproduced
 const CUSTOMER_COUNT = 2000
 const MEDIA_COUNT = 100
 const SCREENSHOT_COUNT = 60 // the rest are text logs
-const BATCH_SIZE = 10 // how many writes run in parallel
+const BATCH_SIZE = 10 // writes that run in parallel
 const DAY_MS = 24 * 60 * 60 * 1000
+const OPEN_TICKET_MAX_AGE_DAYS = 7 // open tickets are recent, so only some are overdue
+const DONE_TICKET_MAX_AGE_DAYS = 30
 
-const PRIORITY_WEIGHTS: Record<TicketPriority, number> = { low: 15, normal: 50, high: 25, urgent: 10 }
+const SEEDED_COLLECTIONS = ['users', 'customers', 'tags', 'tickets', 'media'] as const
+
+const PRIORITY_WEIGHTS: Record<TicketPriority, number> = {
+  low: 15,
+  normal: 50,
+  high: 25,
+  urgent: 10,
+}
 const STATUS_WEIGHTS: Record<TicketStatus, number> = {
   new: 20,
   in_progress: 25,
@@ -33,10 +43,18 @@ const STATUS_WEIGHTS: Record<TicketStatus, number> = {
   resolved: 20,
   closed: 20,
 }
-const OPEN_STATUSES: readonly TicketStatus[] = ['new', 'in_progress', 'waiting_customer']
+
+// Each ticket is created as "New" and then moved one allowed step at a time, so the hook
+// checks every step and stamps the times. Closed tickets go through Resolved, like real ones.
+const STATUS_PATHS: Record<TicketStatus, TicketStatus[]> = {
+  new: [],
+  in_progress: ['in_progress'],
+  waiting_customer: ['in_progress', 'waiting_customer'],
+  resolved: ['in_progress', 'resolved'],
+  closed: ['in_progress', 'resolved', 'closed'],
+}
 
 const RETRY_ATTEMPTS = 3
-// Network errors that are worth another try against a remote database.
 const TRANSIENT_ERROR = /ETIMEDOUT|ECONNRESET|EPIPE|Connection terminated|timeout/i
 
 type Refs = {
@@ -49,14 +67,17 @@ type Refs = {
 let startedAt = Date.now()
 
 export async function runSeed(payload: Payload, options: SeedOptions): Promise<void> {
-  const existing = await payload.count({ collection: 'tickets', overrideAccess: true })
-
   if (options.reset) {
     log('Resetting existing data')
     await resetAll(payload)
-  } else if (existing.totalDocs > 0) {
-    log(`Database already has ${existing.totalDocs} tickets. Run with --reset to regenerate.`)
-    return
+  } else {
+    const existing = await countExisting(payload)
+    if (existing) {
+      log(
+        `Database already has data (${existing}). Run with --reset --confirm=<host> to regenerate.`,
+      )
+      return
+    }
   }
 
   const rng = createRandom(SEED)
@@ -79,8 +100,22 @@ export async function runSeed(payload: Payload, options: SeedOptions): Promise<v
   log('Done')
 }
 
-// Media goes through payload.delete so the files in R2 get removed too.
-// Everything else is one database-level delete per table, which skips the hooks.
+// "3 users, 12 tickets" for the collections that hold rows, or an empty string.
+async function countExisting(payload: Payload): Promise<string> {
+  const counts = await Promise.all(
+    SEEDED_COLLECTIONS.map(async (collection) => ({
+      collection,
+      total: (await payload.count({ collection, overrideAccess: true })).totalDocs,
+    })),
+  )
+  return counts
+    .filter(({ total }) => total > 0)
+    .map(({ collection, total }) => `${total} ${collection}`)
+    .join(', ')
+}
+
+// Media goes through payload.delete so the files in R2 get removed too. The rest is one
+// database-level delete per table.
 async function resetAll(payload: Payload): Promise<void> {
   await payload.delete({
     collection: 'media',
@@ -88,14 +123,12 @@ async function resetAll(payload: Payload): Promise<void> {
     overrideAccess: true,
   })
   for (const collection of ['tickets', 'customers', 'tags', 'users'] as const) {
-    await payload.db.deleteMany({
-      collection,
-      where: { id: { exists: true } },
-    })
+    await payload.db.deleteMany({ collection, where: { id: { exists: true } } })
   }
 }
 
-// Returns the agent IDs so tickets can be assigned to them.
+// The first agent is the demo account and gets SEED_AGENT_PASSWORD. The others get a random
+// password each, so no two accounts share one. An admin can set a new one in the admin.
 async function seedStaff(payload: Payload, options: SeedOptions): Promise<number[]> {
   await payload.create({
     collection: 'users',
@@ -109,14 +142,14 @@ async function seedStaff(payload: Payload, options: SeedOptions): Promise<number
   })
 
   const agents: number[] = []
-  for (const name of AGENT_NAMES) {
+  for (const [index, name] of AGENT_NAMES.entries()) {
     const agent = await payload.create({
       collection: 'users',
       overrideAccess: true,
       data: {
         email: `${slug(name)}@support.example.test`,
         name,
-        password: options.agentPassword,
+        password: index === 0 ? options.agentPassword : randomBytes(24).toString('base64url'),
         roles: ['agent'],
       },
     })
@@ -129,19 +162,16 @@ async function seedCustomers(payload: Payload, rng: Random, count: number): Prom
   const ids: number[] = []
   for (let start = 0; start < count; start += BATCH_SIZE) {
     const size = Math.min(BATCH_SIZE, count - start)
-
-    // Build the rows before any await, so the random sequence doesn't depend on timing.
+    // Built before any await, so the random sequence does not depend on timing.
     const rows = Array.from({ length: size }, (_, offset) => {
       const first = rng.pick(FIRST_NAMES)
       const last = rng.pick(LAST_NAMES)
       return {
         name: `${first} ${last}`,
-        // The index makes the email unique. .test is reserved for examples.
         email: `${slug(first)}.${slug(last)}.${start + offset}@customers.example.test`,
         company: rng.pick(COMPANIES),
       }
     })
-
     const docs = await Promise.all(
       rows.map((data) =>
         withRetry(() => payload.create({ collection: 'customers', overrideAccess: true, data })),
@@ -166,12 +196,10 @@ async function seedTags(payload: Payload, rng: Random): Promise<number[]> {
 }
 
 async function seedMedia(payload: Payload, rng: Random, count: number): Promise<number[]> {
-  // Make all the files first. That part is CPU only and quick.
   const files: { alt: string; name: string; mimetype: string; data: Buffer }[] = []
   for (let i = 0; i < count; i++) {
-    const isScreenshot = i < SCREENSHOT_COUNT
     files.push(
-      isScreenshot
+      i < SCREENSHOT_COUNT
         ? {
             alt: `Screenshot ${i + 1}`,
             name: `screenshot-${i + 1}.png`,
@@ -182,12 +210,14 @@ async function seedMedia(payload: Payload, rng: Random, count: number): Promise<
             alt: `Log ${i + 1}`,
             name: `log-${i + 1}.txt`,
             mimetype: 'text/plain',
-            data: Buffer.from(`Log excerpt ${i + 1}\nStatus: 500\nRetrying in 30 seconds\n`, 'utf8'),
+            data: Buffer.from(
+              `Log excerpt ${i + 1}\nStatus: 500\nRetrying in 30 seconds\n`,
+              'utf8',
+            ),
           },
     )
   }
 
-  // Then upload them a few at a time.
   const ids: number[] = []
   for (let start = 0; start < files.length; start += 5) {
     const docs = await Promise.all(
@@ -212,7 +242,6 @@ async function seedMedia(payload: Payload, rng: Random, count: number): Promise<
   return ids
 }
 
-// A plain coloured rectangle is enough for a demo screenshot.
 async function makePng(rng: Random): Promise<Buffer> {
   return sharp({
     create: {
@@ -241,31 +270,17 @@ async function seedTickets(
     )
 
     await Promise.all(
-      batch.map(async ({ data, pastDueAt, laterStatuses }) => {
+      batch.map(async ({ data, steps }) => {
         const ticket = await withRetry(() =>
           payload.create({ collection: 'tickets', overrideAccess: true, data }),
         )
-        // Tickets go through the workflow like real ones: created as "New", then moved one
-        // allowed step at a time. The tickets hook checks every step.
-        for (const next of laterStatuses) {
+        for (const status of steps) {
           await withRetry(() =>
             payload.update({
               collection: 'tickets',
               id: ticket.id,
               overrideAccess: true,
-              data: { status: next },
-            }),
-          )
-        }
-        // The create hook sets dueAt from the priority. For some open tickets we move it
-        // back into the past, so the overdue view has real examples to show.
-        if (pastDueAt) {
-          await withRetry(() =>
-            payload.update({
-              collection: 'tickets',
-              id: ticket.id,
-              overrideAccess: true,
-              data: { dueAt: pastDueAt },
+              data: { status },
             }),
           )
         }
@@ -282,15 +297,12 @@ async function seedTickets(
 function buildTicket(rng: Random, refs: Refs, index: number, now: number) {
   const status = rng.weighted(STATUS_WEIGHTS)
   const priority = rng.weighted(PRIORITY_WEIGHTS)
-  const customer = rng.pick(refs.customers)
   const company = rng.pick(COMPANIES)
-
-  // The workflow needs an assignee before a ticket can be in progress, so most
-  // non-new tickets get one. Some new ones get one too.
+  // In progress needs an assignee, so every ticket past "New" gets one. Some new ones too.
   const assignee = status !== 'new' || rng.next() < 0.4 ? rng.pick(refs.agents) : undefined
 
-  const tagCount = rng.int(0, 3)
   const tags = new Set<number>()
+  const tagCount = rng.int(0, 3)
   while (tags.size < tagCount) {
     tags.add(rng.pick(refs.tags))
   }
@@ -301,35 +313,30 @@ function buildTicket(rng: Random, refs: Refs, index: number, now: number) {
     attachments: rng.next() < 0.08 ? [rng.pick(refs.media)] : undefined,
   }))
 
-  const pastDueAt =
-    OPEN_STATUSES.includes(status) && rng.next() < 0.3
-      ? new Date(now - rng.int(1, 30) * DAY_MS).toISOString()
-      : undefined
-
-  // Created as "New", then moved one allowed step at a time to the target status.
-  const laterStatuses = statusPath(INITIAL_STATUS, status)
-  if (!laterStatuses) {
-    throw new Error(`Seed status "${status}" cannot be reached from "${INITIAL_STATUS}"`)
-  }
+  // Created in the past, so due dates (set by the hook from createdAt and priority) are
+  // spread out and the older open tickets are overdue.
+  const maxAgeDays = OPEN_STATUSES.includes(status)
+    ? OPEN_TICKET_MAX_AGE_DAYS
+    : DONE_TICKET_MAX_AGE_DAYS
+  const createdAt = new Date(now - rng.next() * maxAgeDays * DAY_MS).toISOString()
 
   return {
-    pastDueAt,
-    laterStatuses,
+    steps: STATUS_PATHS[status],
     data: {
       subject: `${rng.pick(SUBJECTS)} - ${company} #${index + 1}`,
       description: rng.next() < 0.3 ? richText(rng.pick(DESCRIPTIONS)) : undefined,
       status: INITIAL_STATUS,
       priority,
-      customer,
+      customer: rng.pick(refs.customers),
       assignee,
       tags: [...tags],
       comments,
+      createdAt,
     } satisfies Partial<Ticket> & { subject: string; customer: number },
   }
 }
 
-// Runs the operation again if the error looks like a dropped network connection.
-// Anything else fails straight away.
+// Runs the operation again when the error looks like a dropped network connection.
 async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
   let lastError: unknown
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
@@ -370,14 +377,16 @@ function richText(text: string): Ticket['description'] {
           direction: 'ltr',
           textFormat: 0,
           textStyle: '',
-          children: [{ type: 'text', text, format: 0, detail: 0, mode: 'normal', style: '', version: 1 }],
+          children: [
+            { type: 'text', text, format: 0, detail: 0, mode: 'normal', style: '', version: 1 },
+          ],
         },
       ],
     },
   }
 }
 
-// "Priya Shah" -> "priya.shah". Used for email addresses.
+// "Priya Shah" -> "priya.shah", for email addresses.
 function slug(value: string): string {
   return value
     .toLowerCase()

@@ -9,7 +9,11 @@ const values = (options: { value: string }[]) => options.map((option) => option.
 
 describe('allowedStatusOptions', () => {
   it('offers the saved status and its next steps, in workflow order', () => {
-    expect(values(allowedStatusOptions(ALL, 'new').options)).toEqual(['new', 'in_progress', 'closed'])
+    expect(values(allowedStatusOptions(ALL, 'new').options)).toEqual([
+      'new',
+      'in_progress',
+      'closed',
+    ])
     expect(values(allowedStatusOptions(ALL, 'waiting_customer').options)).toEqual([
       'waiting_customer',
       'in_progress',
@@ -18,7 +22,10 @@ describe('allowedStatusOptions', () => {
   })
 
   it('keeps the labels of the original options', () => {
-    expect(allowedStatusOptions(ALL, 'new').options[1]).toEqual({ label: 'In progress', value: 'in_progress' })
+    expect(allowedStatusOptions(ALL, 'new').options[1]).toEqual({
+      label: 'In progress',
+      value: 'in_progress',
+    })
   })
 
   it('explains the next steps under the field', () => {

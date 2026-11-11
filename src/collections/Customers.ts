@@ -36,5 +36,17 @@ export const Customers: CollectionConfig = {
       maxLength: 120,
       admin: { description: 'The organization the customer belongs to. Optional.' },
     },
+    {
+      // Read from tickets.customer; nothing is stored on the customer.
+      name: 'tickets',
+      type: 'join',
+      collection: 'tickets',
+      on: 'customer',
+      defaultSort: '-createdAt',
+      admin: {
+        defaultColumns: ['subject', 'status', 'priority', 'dueAt'],
+        description: 'The tickets this customer has opened, newest first.',
+      },
+    },
   ],
 }

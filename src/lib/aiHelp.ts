@@ -1,18 +1,18 @@
 // Rules for the AI field help. No Payload import, so the unit tests can run them directly.
-//
 // The model only ever sees field metadata (label, type, required, help text, select option
-// labels) of one collection and the user's question. Never documents, never other users'
-// data: collectFieldHelp reads the collection config, not the database.
+// labels) of one collection and the user's question: collectFieldHelp reads the collection
+// config, never the database.
 
 export const AI_INPUT_MAX = 500
 export const AI_TIMEOUT_MS = 10_000
 
-// Collections the help can explain. Anything else from the client falls back to tickets.
 export const HELP_COLLECTIONS = ['tickets', 'customers', 'tags', 'media', 'users'] as const
 export type HelpCollection = (typeof HELP_COLLECTIONS)[number]
 
 export function toHelpCollection(value: unknown): HelpCollection {
-  return (HELP_COLLECTIONS as readonly unknown[]).includes(value) ? (value as HelpCollection) : 'tickets'
+  return (HELP_COLLECTIONS as readonly unknown[]).includes(value)
+    ? (value as HelpCollection)
+    : 'tickets'
 }
 
 export type FieldHelp = {
@@ -24,7 +24,6 @@ export type FieldHelp = {
   options?: string[]
 }
 
-// The part of a Payload field config this reads. Everything else is ignored.
 type FieldLike = {
   name?: unknown
   type?: unknown
@@ -57,7 +56,7 @@ function optionLabels(options: unknown): string[] | undefined {
 
 // Walks a collection's fields, including rows inside arrays and groups, and keeps only what
 // the form shows a person. Hidden and internal fields (password hash, reset tokens, ids) and
-// function-valued labels or descriptions are skipped.
+// function-valued labels are skipped.
 export function collectFieldHelp(fields: readonly unknown[], prefix = ''): FieldHelp[] {
   const result: FieldHelp[] = []
   for (const raw of fields) {
@@ -70,7 +69,8 @@ export function collectFieldHelp(fields: readonly unknown[], prefix = ''): Field
     }
     const path = prefix ? `${prefix}.${field.name}` : field.name
     const label = typeof field.label === 'string' ? field.label : humanize(field.name)
-    const description = typeof field.admin?.description === 'string' ? field.admin.description : undefined
+    const description =
+      typeof field.admin?.description === 'string' ? field.admin.description : undefined
     const entry: FieldHelp = {
       path,
       label,
@@ -104,7 +104,9 @@ export function checkQuestion(raw: unknown): QuestionCheck {
 export type ChatMessage = { role: 'system' | 'user'; content: string }
 
 function fieldLine(field: FieldHelp): string {
-  const parts = [`- ${field.label} (${field.path}, ${field.type}${field.required ? ', required' : ''})`]
+  const parts = [
+    `- ${field.label} (${field.path}, ${field.type}${field.required ? ', required' : ''})`,
+  ]
   if (field.options) parts.push(`options: ${field.options.join(', ')}`)
   if (field.description) parts.push(field.description)
   return parts.join(' — ')
@@ -135,7 +137,6 @@ export function buildMessages(input: {
   ]
 }
 
-// Reads the answer out of a chat completions response. Null when there is none.
 export function readAnswer(body: unknown): string | null {
   const choices = (body as { choices?: unknown })?.choices
   if (!Array.isArray(choices)) return null
@@ -145,9 +146,8 @@ export function readAnswer(body: unknown): string | null {
   return text ? text : null
 }
 
-// The widget shows the answer as text, so Markdown the model adds anyway would show as
-// stray symbols. Removes emphasis, inline code, headings and trailing line-break spaces.
-// "- " list lines stay: they read fine as text.
+// The widget shows the answer as text, so Markdown the model adds anyway would show as stray
+// symbols. Emphasis, inline code, fences and headings go; "- " list lines read fine as text.
 export function toPlainText(markdown: string): string {
   return markdown
     .replace(/```[a-z]*\n?([\s\S]*?)```/g, '$1')
@@ -164,21 +164,33 @@ export function toPlainText(markdown: string): string {
 
 export type AiFailure = 'not_configured' | 'timeout' | 'busy' | 'unavailable' | 'empty'
 
-// What the admin shows when the help cannot answer. The admin keeps working either way.
+// What the admin shows when the help cannot answer.
 export const AI_FAILURE_MESSAGES: Record<AiFailure, string> = {
-  not_configured: 'AI help is not set up on this server. The help text under each field still applies.',
-  timeout: 'The AI help took longer than 10 seconds. Try again, or read the help text under the field.',
+  not_configured:
+    'AI help is not set up on this server. The help text under each field still applies.',
+  timeout:
+    'The AI help took longer than 10 seconds. Try again, or read the help text under the field.',
   busy: 'The AI help is busy right now. Wait a minute and try again.',
-  unavailable: 'The AI help is unavailable right now. The help text under each field still applies.',
+  unavailable:
+    'The AI help is unavailable right now. The help text under each field still applies.',
   empty: 'The AI help returned no answer. Try asking in a different way.',
 }
 
 // A fixed window per user: at most `limit` questions per `windowMs`. Kept in memory, which is
-// enough for the single free Render instance. It protects the free Groq quota from one user.
+// enough for the single free Render instance. Expired windows are swept once per window.
 export function createRateLimiter(options: { limit: number; windowMs: number }) {
   const windows = new Map<string, { start: number; count: number }>()
+  let sweptAt = -Infinity
   return {
     allow(key: string, now: number): boolean {
+      if (now - sweptAt >= options.windowMs) {
+        sweptAt = now
+        for (const [other, window] of windows) {
+          if (now - window.start >= options.windowMs) {
+            windows.delete(other)
+          }
+        }
+      }
       const current = windows.get(key)
       if (!current || now - current.start >= options.windowMs) {
         windows.set(key, { start: now, count: 1 })
@@ -189,6 +201,9 @@ export function createRateLimiter(options: { limit: number; windowMs: number }) 
       }
       current.count += 1
       return true
+    },
+    get size() {
+      return windows.size
     },
   }
 }

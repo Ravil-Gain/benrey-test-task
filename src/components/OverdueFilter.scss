@@ -1,0 +1,12 @@
+.overdue-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--base) * 0.5);
+  margin-bottom: var(--base);
+
+  &__hint {
+    font-size: 12px;
+    opacity: 0.8;
+  }
+}

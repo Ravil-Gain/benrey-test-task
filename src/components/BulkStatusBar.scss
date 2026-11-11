@@ -1,0 +1,29 @@
+.bulk-status-bar {
+  display: grid;
+  gap: calc(var(--base) * 0.5);
+  margin-bottom: var(--base);
+  padding: calc(var(--base) * 0.75);
+  border: 1px solid var(--theme-elevation-150);
+  border-radius: var(--style-radius-m);
+
+  &__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--base) * 0.5);
+  }
+
+  &__select {
+    padding: 4px 8px;
+    background: var(--theme-input-bg);
+    color: var(--theme-text);
+    border: 1px solid var(--theme-elevation-150);
+    border-radius: var(--style-radius-s);
+    font: inherit;
+  }
+
+  &__failures ul {
+    margin: 4px 0 0;
+    padding-left: calc(var(--base) * 1.25);
+  }
+}

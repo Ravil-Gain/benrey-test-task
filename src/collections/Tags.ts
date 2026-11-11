@@ -23,7 +23,10 @@ export const Tags: CollectionConfig = {
       required: true,
       unique: true,
       maxLength: 40,
-      admin: { description: 'A short label such as billing or outage, up to 40 characters. Each tag name is used once.' },
+      admin: {
+        description:
+          'A short label such as billing or outage, up to 40 characters. Each tag name is used once.',
+      },
     },
     {
       name: 'color',

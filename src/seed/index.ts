@@ -1,8 +1,8 @@
 /**
  * Entry point for `pnpm seed`. Usage:
- *   pnpm seed                 seed an empty database
- *   pnpm seed --reset         delete all data, then seed again (never in production)
- *   pnpm seed --tickets=500   seed a smaller number of tickets
+ *   pnpm seed                          seed an empty database
+ *   pnpm seed --tickets=500            seed fewer tickets (default 2000)
+ *   pnpm seed --reset --confirm=<host> delete all data in the database at <host>, then seed
  */
 import 'dotenv/config'
 import { getPayload } from 'payload'
@@ -25,6 +25,6 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(0))
   .catch((error: unknown) => {
-    console.error(error)
+    console.error(error instanceof Error ? error.message : error)
     process.exit(1)
   })

@@ -1,7 +1,12 @@
 import type { CollectionConfig } from 'payload'
 
 import { isAdmin, isStaff } from '../lib/access'
-import { describeDueWindows, isOverdue, TICKET_PRIORITIES } from '../lib/dueDate'
+import {
+  describeDueWindows,
+  isOverdue,
+  TICKET_PRIORITIES,
+  TICKET_PRIORITY_LABELS,
+} from '../lib/dueDate'
 import {
   describeWorkflow,
   INITIAL_STATUS,
@@ -12,11 +17,12 @@ import {
 import { beforeTicketChange } from '../hooks/tickets'
 import { bulkStatus } from '../endpoints/bulkStatus'
 
-// Dates the server fills in. They show in the sidebar but nobody types them.
+// Dates the server fills in. Field access, not only admin.readOnly: a value sent through the
+// API is dropped before the hook runs.
 const serverDate = {
-  readOnly: true,
-  position: 'sidebar',
-  date: { pickerAppearance: 'dayAndTime' },
+  type: 'date',
+  access: { create: () => false, update: () => false },
+  admin: { readOnly: true, position: 'sidebar', date: { pickerAppearance: 'dayAndTime' } },
 } as const
 
 export const Tickets: CollectionConfig = {
@@ -24,10 +30,12 @@ export const Tickets: CollectionConfig = {
   admin: {
     useAsTitle: 'subject',
     defaultColumns: ['subject', 'status', 'priority', 'assignee', 'dueAt'],
-    listSearchableFields: ['subject'],
+    listSearchableFields: ['subject', 'id', 'customer.name', 'customer.email'],
     components: {
-      // Bulk status change for the selected rows. It calls the bulk-status endpoint below.
-      beforeListTable: ['/components/BulkStatusBar#BulkStatusBar'],
+      beforeListTable: [
+        '/components/OverdueFilter#OverdueFilter',
+        '/components/BulkStatusBar#BulkStatusBar',
+      ],
     },
   },
   access: {
@@ -39,13 +47,7 @@ export const Tickets: CollectionConfig = {
   hooks: {
     beforeChange: [beforeTicketChange],
   },
-  endpoints: [
-    {
-      path: '/bulk-status',
-      method: 'post',
-      handler: bulkStatus,
-    },
-  ],
+  endpoints: [{ path: '/bulk-status', method: 'post', handler: bulkStatus }],
   fields: [
     {
       name: 'subject',
@@ -54,42 +56,35 @@ export const Tickets: CollectionConfig = {
       minLength: 5,
       maxLength: 200,
       admin: {
-        description: 'A short summary of the problem, 5 to 200 characters. It is the ticket title in lists and search.',
+        description:
+          'A short summary of the problem, 5 to 200 characters. It is the ticket title in lists and search.',
       },
     },
     {
       name: 'description',
       type: 'richText',
       admin: {
-        description: 'The full problem as the customer reported it: steps, error messages, links. Optional.',
+        description:
+          'The full problem as the customer reported it: steps, error messages, links. Optional.',
       },
     },
     {
       name: 'status',
       type: 'select',
       required: true,
-      // The list filters on it, and so does the bulk bar's "select all" query.
       index: true,
       defaultValue: INITIAL_STATUS,
       options: TICKET_STATUSES.map((value) => ({ label: TICKET_STATUS_LABELS[value], value })),
-      // The transition rules are checked in beforeTicketChange, not here. The form only
-      // keeps people from picking a status the server would refuse.
       admin: {
         position: 'sidebar',
-        // The form replaces this with a hint for the ticket's own next steps. The AI help
-        // reads this full version.
         description: describeWorkflow(),
-        // A ticket always has a status, so the select has no clear button.
         isClearable: false,
         components: {
-          // Offers the current status and the allowed next steps only. On the create form
-          // it shows "New" read-only. (An admin.condition would hide it too, but Payload then
-          // treats the column as nullable and drops its NOT NULL constraint.)
+          // Offers only the saved status and its allowed next steps. The hook still checks.
           Field: '/components/TicketStatusField#TicketStatusField',
         },
       },
       hooks: {
-        // A copy is a new ticket, so it starts as "New" too.
         beforeDuplicate: [() => INITIAL_STATUS],
       },
     },
@@ -97,16 +92,12 @@ export const Tickets: CollectionConfig = {
       name: 'priority',
       type: 'select',
       required: true,
-      // The list filters and sorts on it.
       index: true,
       defaultValue: 'normal',
-      options: TICKET_PRIORITIES.map((value) => ({
-        label: value.charAt(0).toUpperCase() + value.slice(1),
-        value,
-      })),
+      options: TICKET_PRIORITIES.map((value) => ({ label: TICKET_PRIORITY_LABELS[value], value })),
       admin: {
         position: 'sidebar',
-        description: `How fast the ticket needs an answer. It sets the due date when the ticket is created: ${describeDueWindows()}. Changing it later does not move the due date.`,
+        description: `How fast the ticket needs an answer, counted from when it was created: ${describeDueWindows()}. Changing it moves the due date.`,
       },
     },
     {
@@ -116,16 +107,20 @@ export const Tickets: CollectionConfig = {
       required: true,
       admin: {
         position: 'sidebar',
-        description: 'The customer who reported the problem. Required. Pick an existing customer or add one with the + button.',
+        description:
+          'The customer who reported the problem. Required. Pick an existing customer or add one with the + button.',
       },
     },
     {
       name: 'assignee',
       type: 'relationship',
       relationTo: 'users',
+      // Only agents. Payload applies this in the picker and checks it again when saving.
+      filterOptions: { roles: { equals: 'agent' } },
       admin: {
         position: 'sidebar',
-        description: 'The agent who works on the ticket. Needed before the status can move to "In progress".',
+        description:
+          'The agent who works on the ticket. Required while the status is "In progress".',
       },
     },
     {
@@ -134,28 +129,28 @@ export const Tickets: CollectionConfig = {
       relationTo: 'tags',
       hasMany: true,
       admin: {
-        description: 'Labels such as billing or outage, for filtering and reports. Pick as many as fit. Only admins create new tags.',
+        description:
+          'Labels such as billing or outage, for filtering and reports. Pick as many as fit. Only admins create new tags.',
       },
     },
     {
+      ...serverDate,
       name: 'dueAt',
-      type: 'date',
-      // Sorting by due date and finding the tickets that are past it.
       index: true,
       admin: {
-        ...serverDate,
-        description: `Set by the server when the ticket is created, from the priority: ${describeDueWindows()}.`,
+        ...serverDate.admin,
+        description: `Set by the server from the priority and the creation time: ${describeDueWindows()}.`,
       },
     },
     {
-      // Not stored. Worked out every time the ticket is read.
       name: 'isOverdue',
       type: 'checkbox',
       virtual: true,
       admin: {
         readOnly: true,
         position: 'sidebar',
-        description: 'Checked when the due date has passed and the ticket is not resolved or closed. Worked out on every read, not stored.',
+        description:
+          'Checked when the due date has passed and the ticket is not resolved or closed. Worked out on every read, not stored.',
       },
       hooks: {
         afterRead: [
@@ -169,23 +164,33 @@ export const Tickets: CollectionConfig = {
       },
     },
     {
+      ...serverDate,
       name: 'resolvedAt',
-      type: 'date',
-      admin: { ...serverDate, description: 'Set by the server when the status moves to "Resolved".' },
-      hooks: { beforeDuplicate: [() => null] },
+      admin: {
+        ...serverDate.admin,
+        description:
+          'Set by the server when the status moves to "Resolved", cleared when it is reopened.',
+      },
     },
     {
+      ...serverDate,
       name: 'closedAt',
-      type: 'date',
-      admin: { ...serverDate, description: 'Set by the server when the status moves to "Closed".' },
-      hooks: { beforeDuplicate: [() => null] },
+      admin: {
+        ...serverDate.admin,
+        description: 'Set by the server when the status moves to "Closed".',
+      },
     },
     {
       name: 'comments',
       type: 'array',
       labels: { singular: 'Comment', plural: 'Comments' },
       admin: {
-        description: 'Notes and replies on the ticket. Add and edit them right here. The server fills in the author and time.',
+        description:
+          'Notes and replies on the ticket. The server fills in the author and time. Only the author or an admin can edit or remove a comment.',
+      },
+      hooks: {
+        // A copy of a ticket is a new ticket. The conversation stays with the original.
+        beforeDuplicate: [() => []],
       },
       fields: [
         {
@@ -202,14 +207,18 @@ export const Tickets: CollectionConfig = {
           hasMany: true,
           maxRows: 5,
           admin: {
-            description: 'Up to 5 files: JPEG, PNG, WebP, PDF or plain text, 5 MB each. The file content must match its type.',
+            description:
+              'Up to 5 files: JPEG, PNG, WebP, PDF or plain text, 5 MB each. The file content must match its type.',
           },
         },
         {
           name: 'author',
           type: 'relationship',
           relationTo: 'users',
-          admin: { readOnly: true, description: 'Set by the server to the person who wrote the comment.' },
+          admin: {
+            readOnly: true,
+            description: 'Set by the server to the person who wrote the comment.',
+          },
         },
         {
           name: 'createdAt',

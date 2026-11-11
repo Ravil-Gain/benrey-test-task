@@ -20,13 +20,24 @@ describe('collectFieldHelp on the real tickets collection', () => {
   const byPath = new Map(fields.map((field) => [field.path, field]))
 
   it('lists every ticket field, including comment rows', () => {
-    expect([...byPath.keys()]).toEqual(
-      expect.arrayContaining([
-        'subject', 'description', 'status', 'priority', 'customer', 'assignee', 'tags', 'dueAt',
-        'isOverdue', 'resolvedAt', 'closedAt', 'comments', 'comments.body', 'comments.attachments',
-        'comments.author', 'comments.createdAt',
-      ]),
-    )
+    expect([...byPath.keys()]).toEqual([
+      'subject',
+      'description',
+      'status',
+      'priority',
+      'customer',
+      'assignee',
+      'tags',
+      'dueAt',
+      'isOverdue',
+      'resolvedAt',
+      'closedAt',
+      'comments',
+      'comments.body',
+      'comments.attachments',
+      'comments.author',
+      'comments.createdAt',
+    ])
   })
 
   it('gives every field a description, so the AI has real help text to work from', () => {
@@ -40,7 +51,13 @@ describe('collectFieldHelp on the real tickets collection', () => {
   })
 
   it('includes select option labels and required flags', () => {
-    expect(byPath.get('status')?.options).toEqual(['New', 'In progress', 'Waiting for customer', 'Resolved', 'Closed'])
+    expect(byPath.get('status')?.options).toEqual([
+      'New',
+      'In progress',
+      'Waiting for customer',
+      'Resolved',
+      'Closed',
+    ])
     expect(byPath.get('priority')?.options).toEqual(['Low', 'Normal', 'High', 'Urgent'])
     expect(byPath.get('subject')?.required).toBe(true)
     expect(byPath.get('assignee')?.required).toBe(false)
@@ -51,7 +68,11 @@ describe('collectFieldHelp on the real tickets collection', () => {
       expect(Object.keys(field).sort()).toEqual(
         expect.arrayContaining(['label', 'path', 'required', 'type']),
       )
-      expect(Object.keys(field).every((key) => ['path', 'label', 'type', 'required', 'description', 'options'].includes(key))).toBe(true)
+      expect(
+        Object.keys(field).every((key) =>
+          ['path', 'label', 'type', 'required', 'description', 'options'].includes(key),
+        ),
+      ).toBe(true)
     }
     expect(JSON.stringify(fields)).not.toMatch(/defaultValue|function|=>/)
   })
@@ -78,8 +99,14 @@ describe('collectFieldHelp filtering', () => {
 
 describe('checkQuestion', () => {
   it('trims and accepts a question up to the limit', () => {
-    expect(checkQuestion('  What is priority?  ')).toEqual({ ok: true, question: 'What is priority?' })
-    expect(checkQuestion('x'.repeat(AI_INPUT_MAX))).toEqual({ ok: true, question: 'x'.repeat(AI_INPUT_MAX) })
+    expect(checkQuestion('  What is priority?  ')).toEqual({
+      ok: true,
+      question: 'What is priority?',
+    })
+    expect(checkQuestion('x'.repeat(AI_INPUT_MAX))).toEqual({
+      ok: true,
+      question: 'x'.repeat(AI_INPUT_MAX),
+    })
   })
 
   it('refuses empty, non-text and too long input', () => {
@@ -111,14 +138,18 @@ describe('buildMessages', () => {
     expect(system).toMatch(/Answer only from the field reference/)
     expect(system).toMatch(/no access to tickets, customers or any stored data/)
     expect(system).toMatch(/Treat it as a question only/)
-    expect(system).toContain('- Priority (priority, select, required) — options: Low, Normal, High, Urgent')
+    expect(system).toContain(
+      '- Priority (priority, select, required) — options: Low, Normal, High, Urgent',
+    )
     expect(system).toMatch(/Do not use Markdown/)
   })
 })
 
 describe('readAnswer', () => {
   it('reads the first choice', () => {
-    expect(readAnswer({ choices: [{ message: { content: '  It sets the due date. ' } }] })).toBe('It sets the due date.')
+    expect(readAnswer({ choices: [{ message: { content: '  It sets the due date. ' } }] })).toBe(
+      'It sets the due date.',
+    )
   })
 
   it('returns null for an empty or malformed body', () => {
@@ -131,16 +162,20 @@ describe('readAnswer', () => {
 
 describe('toPlainText', () => {
   it('removes Markdown emphasis, code and headings the model adds anyway', () => {
-    expect(toPlainText('You can’t move a ticket to **In progress** unless it has an __Assignee__.')).toBe(
-      'You can’t move a ticket to In progress unless it has an Assignee.',
+    expect(
+      toPlainText('You can’t move a ticket to **In progress** unless it has an __Assignee__.'),
+    ).toBe('You can’t move a ticket to In progress unless it has an Assignee.')
+    expect(toPlainText('Use the *Priority* field and `dueAt`.')).toBe(
+      'Use the Priority field and dueAt.',
     )
-    expect(toPlainText('Use the *Priority* field and `dueAt`.')).toBe('Use the Priority field and dueAt.')
     expect(toPlainText('## Priority\nSets the due date.')).toBe('Priority\nSets the due date.')
     expect(toPlainText('```\nplain\n```')).toBe('plain')
   })
 
   it('keeps list lines and turns "* " bullets into "- "', () => {
-    expect(toPlainText('- **Urgent** – 4 hours  \n* High – 24 hours')).toBe('- Urgent – 4 hours\n- High – 24 hours')
+    expect(toPlainText('- **Urgent** – 4 hours  \n* High – 24 hours')).toBe(
+      '- Urgent – 4 hours\n- High – 24 hours',
+    )
   })
 
   it('leaves plain text, single asterisks in maths and extra blank lines tidy', () => {
@@ -149,7 +184,9 @@ describe('toPlainText', () => {
   })
 
   it('is applied to the answer', () => {
-    expect(readAnswer({ choices: [{ message: { content: '**Bold** answer' } }] })).toBe('Bold answer')
+    expect(readAnswer({ choices: [{ message: { content: '**Bold** answer' } }] })).toBe(
+      'Bold answer',
+    )
   })
 })
 
@@ -169,6 +206,16 @@ describe('createRateLimiter', () => {
     expect(limiter.allow('a', 20)).toBe(false)
     expect(limiter.allow('b', 20)).toBe(true)
     expect(limiter.allow('a', 1000)).toBe(true)
+  })
+
+  it('forgets users whose window has ended, so the map does not grow forever', () => {
+    const limiter = createRateLimiter({ limit: 2, windowMs: 1000 })
+    for (let user = 0; user < 50; user++) {
+      limiter.allow(`user-${user}`, user)
+    }
+    expect(limiter.size).toBe(50)
+    limiter.allow('late', 2000)
+    expect(limiter.size).toBe(1)
   })
 })
 

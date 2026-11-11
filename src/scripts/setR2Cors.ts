@@ -3,13 +3,13 @@
  *   pnpm r2:cors https://<app>.onrender.com http://localhost:3000
  *   pnpm r2:cors --dry-run https://<app>.onrender.com     print the rule, change nothing
  *
- * Pass every origin the admin runs on. The rule replaces the bucket's whole CORS config.
- * The R2 token in .env needs permission to change bucket settings.
+ * Pass every origin the admin runs on: the rule replaces the bucket's whole CORS config.
  */
 import 'dotenv/config'
 import { GetBucketCorsCommand, PutBucketCorsCommand, S3Client } from '@aws-sdk/client-s3'
 
 import { env } from '../lib/env'
+import { r2ClientConfig } from '../lib/r2'
 import { buildCorsRules } from '../lib/r2Cors'
 
 async function main(): Promise<void> {
@@ -17,15 +17,10 @@ async function main(): Promise<void> {
   const dryRun = args.includes('--dry-run')
   const rules = buildCorsRules(args.filter((arg) => arg !== '--dry-run'))
 
-  const r2 = env.r2()
-  const client = new S3Client({
-    endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
-    region: 'auto',
-    credentials: { accessKeyId: r2.accessKeyId, secretAccessKey: r2.secretAccessKey },
-  })
-
+  const Bucket = env.r2().bucket
+  const client = new S3Client(r2ClientConfig())
   const current = await client
-    .send(new GetBucketCorsCommand({ Bucket: r2.bucket }))
+    .send(new GetBucketCorsCommand({ Bucket }))
     .then((result) => result.CORSRules ?? [])
     .catch(() => [])
   console.log('Current rule:', JSON.stringify(current, null, 2))
@@ -35,10 +30,8 @@ async function main(): Promise<void> {
     console.log('Dry run, nothing changed.')
     return
   }
-  await client.send(
-    new PutBucketCorsCommand({ Bucket: r2.bucket, CORSConfiguration: { CORSRules: rules } }),
-  )
-  console.log(`CORS updated on bucket ${r2.bucket}.`)
+  await client.send(new PutBucketCorsCommand({ Bucket, CORSConfiguration: { CORSRules: rules } }))
+  console.log(`CORS updated on bucket ${Bucket}.`)
 }
 
 main().catch((error: unknown) => {
