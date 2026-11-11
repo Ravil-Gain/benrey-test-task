@@ -14,6 +14,7 @@ import { Media } from './collections/Media'
 import { Tags } from './collections/Tags'
 import { Tickets } from './collections/Tickets'
 import { Users } from './collections/Users'
+import { aiHelp } from './endpoints/aiHelp'
 import { rememberOriginalNames } from './plugins/rememberOriginalNames'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -34,7 +35,13 @@ export default buildConfig({
     meta: {
       titleSuffix: ' · Support',
     },
+    components: {
+      // The "Field help" button on every admin page (AI help, POST /api/ai-help).
+      providers: ['/components/AiHelp#AiHelpProvider'],
+    },
   },
+  // Custom endpoints that belong to no collection.
+  endpoints: [{ path: '/ai-help', method: 'post', handler: aiHelp }],
   collections: [Users, Customers, Tags, Tickets, Media],
   // Size limit for every upload, including the signed URLs for direct uploads.
   upload: {

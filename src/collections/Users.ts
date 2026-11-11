@@ -38,6 +38,7 @@ export const Users: CollectionConfig = {
       type: 'text',
       required: true,
       maxLength: 120,
+      admin: { description: 'The staff member\'s full name, shown as assignee and comment author.' },
     },
     {
       name: 'roles',
@@ -45,6 +46,9 @@ export const Users: CollectionConfig = {
       hasMany: true,
       // No default role. An admin has to assign one.
       defaultValue: [],
+      admin: {
+        description: 'Admin manages users, tags and deletes. Agent works on tickets and customers. A user with no role cannot open the admin. Only admins change roles.',
+      },
       options: [
         { label: 'Admin', value: 'admin' },
         { label: 'Agent', value: 'agent' },

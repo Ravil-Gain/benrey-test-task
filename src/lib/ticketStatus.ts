@@ -104,3 +104,19 @@ export function statusPath(from: TicketStatus, to: TicketStatus): TicketStatus[]
   }
   return null
 }
+
+// One sentence per status with its allowed next steps, for the status field's help text and
+// the AI context. Built from NEXT_STATUSES, so it cannot drift from the workflow.
+export function describeWorkflow(): string {
+  const steps = TICKET_STATUSES.map((status) => {
+    const next = NEXT_STATUSES[status].map((value) => `"${TICKET_STATUS_LABELS[value]}"`)
+    return next.length
+      ? `"${TICKET_STATUS_LABELS[status]}" can move to ${next.join(' or ')}.`
+      : `"${TICKET_STATUS_LABELS[status]}" is final.`
+  })
+  return [
+    `Every ticket starts as "${TICKET_STATUS_LABELS[INITIAL_STATUS]}".`,
+    ...steps,
+    `Moving to "${TICKET_STATUS_LABELS.in_progress}" needs an assignee.`,
+  ].join(' ')
+}

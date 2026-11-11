@@ -23,10 +23,12 @@ export const Tags: CollectionConfig = {
       required: true,
       unique: true,
       maxLength: 40,
+      admin: { description: 'A short label such as billing or outage, up to 40 characters. Each tag name is used once.' },
     },
     {
       name: 'color',
       type: 'text',
+      admin: { description: 'Optional display color as a hex code, for example #1a2b3c.' },
       validate: (value: string | null | undefined) =>
         !value || HEX_COLOR.test(value) || 'Use a hex color such as #1a2b3c',
     },

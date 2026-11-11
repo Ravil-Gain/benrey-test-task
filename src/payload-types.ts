@@ -129,7 +129,13 @@ export interface UserAuthOperations {
  */
 export interface User {
   id: number;
+  /**
+   * The staff member's full name, shown as assignee and comment author.
+   */
   name: string;
+  /**
+   * Admin manages users, tags and deletes. Agent works on tickets and customers. A user with no role cannot open the admin. Only admins change roles.
+   */
   roles?: ('admin' | 'agent')[] | null;
   updatedAt: string;
   createdAt: string;
@@ -157,8 +163,17 @@ export interface User {
  */
 export interface Customer {
   id: number;
+  /**
+   * The person who contacts support. Up to 120 characters.
+   */
   name: string;
+  /**
+   * Where support replies go. Each customer has a different email.
+   */
   email: string;
+  /**
+   * The organization the customer belongs to. Optional.
+   */
   company?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -169,7 +184,13 @@ export interface Customer {
  */
 export interface Tag {
   id: number;
+  /**
+   * A short label such as billing or outage, up to 40 characters. Each tag name is used once.
+   */
   name: string;
+  /**
+   * Optional display color as a hex code, for example #1a2b3c.
+   */
   color?: string | null;
   updatedAt: string;
   createdAt: string;
@@ -180,7 +201,13 @@ export interface Tag {
  */
 export interface Ticket {
   id: number;
+  /**
+   * A short summary of the problem, 5 to 200 characters. It is the ticket title in lists and search.
+   */
   subject: string;
+  /**
+   * The full problem as the customer reported it: steps, error messages, links. Optional.
+   */
   description?: {
     root: {
       type: string;
@@ -196,23 +223,62 @@ export interface Ticket {
     };
     [k: string]: unknown;
   } | null;
+  /**
+   * Every ticket starts as "New". "New" can move to "In progress" or "Closed". "In progress" can move to "Waiting for customer" or "Resolved". "Waiting for customer" can move to "In progress" or "Resolved". "Resolved" can move to "In progress" or "Closed". "Closed" is final. Moving to "In progress" needs an assignee.
+   */
   status: 'new' | 'in_progress' | 'waiting_customer' | 'resolved' | 'closed';
+  /**
+   * How fast the ticket needs an answer. It sets the due date when the ticket is created: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours. Changing it later does not move the due date.
+   */
   priority: 'low' | 'normal' | 'high' | 'urgent';
+  /**
+   * The customer who reported the problem. Required. Pick an existing customer or add one with the + button.
+   */
   customer: number | Customer;
+  /**
+   * The agent who works on the ticket. Needed before the status can move to "In progress".
+   */
   assignee?: (number | null) | User;
+  /**
+   * Labels such as billing or outage, for filtering and reports. Pick as many as fit. Only admins create new tags.
+   */
   tags?: (number | Tag)[] | null;
+  /**
+   * Set by the server when the ticket is created, from the priority: Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours.
+   */
   dueAt?: string | null;
+  /**
+   * Checked when the due date has passed and the ticket is not resolved or closed. Worked out on every read, not stored.
+   */
   isOverdue?: boolean | null;
+  /**
+   * Set by the server when the status moves to "Resolved".
+   */
   resolvedAt?: string | null;
+  /**
+   * Set by the server when the status moves to "Closed".
+   */
   closedAt?: string | null;
   /**
-   * Edit comments right here. The server fills in the author and time.
+   * Notes and replies on the ticket. Add and edit them right here. The server fills in the author and time.
    */
   comments?:
     | {
+        /**
+         * The comment text, up to 5,000 characters.
+         */
         body: string;
+        /**
+         * Up to 5 files: JPEG, PNG, WebP, PDF or plain text, 5 MB each. The file content must match its type.
+         */
         attachments?: (number | Media)[] | null;
+        /**
+         * Set by the server to the person who wrote the comment.
+         */
         author?: (number | null) | User;
+        /**
+         * Set by the server when the comment is added.
+         */
         createdAt?: string | null;
         id?: string | null;
       }[]
@@ -226,7 +292,13 @@ export interface Ticket {
  */
 export interface Media {
   id: number;
+  /**
+   * A short text that says what the file shows, for screen readers. Up to 200 characters.
+   */
   alt?: string | null;
+  /**
+   * The file name as uploaded. Set by the server.
+   */
   originalName?: string | null;
   _objectKey?: string | null;
   updatedAt: string;

@@ -29,3 +29,13 @@ export function isOverdue(input: {
   }
   return new Date(input.dueAt).getTime() < input.now.getTime()
 }
+
+// "Urgent 4 hours, High 24 hours, Normal 72 hours, Low 168 hours", for the due date's help
+// text. Built from DUE_WINDOW_HOURS, so the text cannot drift from the rule.
+export function describeDueWindows(): string {
+  const label = (priority: TicketPriority) => priority.charAt(0).toUpperCase() + priority.slice(1)
+  return [...TICKET_PRIORITIES]
+    .reverse()
+    .map((priority) => `${label(priority)} ${DUE_WINDOW_HOURS[priority]} hours`)
+    .join(', ')
+}

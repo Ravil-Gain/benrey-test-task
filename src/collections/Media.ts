@@ -31,12 +31,13 @@ export const Media: CollectionConfig = {
       name: 'alt',
       type: 'text',
       maxLength: 200,
+      admin: { description: 'A short text that says what the file shows, for screen readers. Up to 200 characters.' },
     },
     {
       // Set by the server. Shown for reference only.
       name: 'originalName',
       type: 'text',
-      admin: { readOnly: true },
+      admin: { readOnly: true, description: 'The file name as uploaded. Set by the server.' },
     },
   ],
 }

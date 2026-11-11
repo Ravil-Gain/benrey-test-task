@@ -45,6 +45,10 @@ export const env = {
   payloadSecret: () => required('PAYLOAD_SECRET'),
   // The public address of the app, e.g. http://localhost:3000 or the Render URL.
   serverUrl: () => parseServerOrigin(required('PAYLOAD_PUBLIC_SERVER_URL'), process.env.NODE_ENV),
+  // Optional. Without a key the AI field help answers "not set up" and the admin keeps
+  // working, so a missing key must not stop the app from starting.
+  groqApiKey: (): string | null => process.env.GROQ_API_KEY?.trim() || null,
+  groqModel: (): string | null => process.env.GROQ_MODEL?.trim() || null,
   r2: () => ({
     accountId: required('R2_ACCOUNT_ID'),
     bucket: required('R2_BUCKET'),

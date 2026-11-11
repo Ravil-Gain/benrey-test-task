@@ -1,8 +1,9 @@
 import type { CollectionConfig } from 'payload'
 
 import { isAdmin, isStaff } from '../lib/access'
-import { isOverdue, TICKET_PRIORITIES } from '../lib/dueDate'
+import { describeDueWindows, isOverdue, TICKET_PRIORITIES } from '../lib/dueDate'
 import {
+  describeWorkflow,
   INITIAL_STATUS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
@@ -52,10 +53,16 @@ export const Tickets: CollectionConfig = {
       required: true,
       minLength: 5,
       maxLength: 200,
+      admin: {
+        description: 'A short summary of the problem, 5 to 200 characters. It is the ticket title in lists and search.',
+      },
     },
     {
       name: 'description',
       type: 'richText',
+      admin: {
+        description: 'The full problem as the customer reported it: steps, error messages, links. Optional.',
+      },
     },
     {
       name: 'status',
@@ -67,6 +74,9 @@ export const Tickets: CollectionConfig = {
       // keeps people from picking a status the server would refuse.
       admin: {
         position: 'sidebar',
+        // The form replaces this with a hint for the ticket's own next steps. The AI help
+        // reads this full version.
+        description: describeWorkflow(),
         // A ticket always has a status, so the select has no clear button.
         isClearable: false,
         components: {
@@ -90,38 +100,57 @@ export const Tickets: CollectionConfig = {
         label: value.charAt(0).toUpperCase() + value.slice(1),
         value,
       })),
-      admin: { position: 'sidebar' },
+      admin: {
+        position: 'sidebar',
+        description: `How fast the ticket needs an answer. It sets the due date when the ticket is created: ${describeDueWindows()}. Changing it later does not move the due date.`,
+      },
     },
     {
       name: 'customer',
       type: 'relationship',
       relationTo: 'customers',
       required: true,
-      admin: { position: 'sidebar' },
+      admin: {
+        position: 'sidebar',
+        description: 'The customer who reported the problem. Required. Pick an existing customer or add one with the + button.',
+      },
     },
     {
       name: 'assignee',
       type: 'relationship',
       relationTo: 'users',
-      admin: { position: 'sidebar' },
+      admin: {
+        position: 'sidebar',
+        description: 'The agent who works on the ticket. Needed before the status can move to "In progress".',
+      },
     },
     {
       name: 'tags',
       type: 'relationship',
       relationTo: 'tags',
       hasMany: true,
+      admin: {
+        description: 'Labels such as billing or outage, for filtering and reports. Pick as many as fit. Only admins create new tags.',
+      },
     },
     {
       name: 'dueAt',
       type: 'date',
-      admin: serverDate,
+      admin: {
+        ...serverDate,
+        description: `Set by the server when the ticket is created, from the priority: ${describeDueWindows()}.`,
+      },
     },
     {
       // Not stored. Worked out every time the ticket is read.
       name: 'isOverdue',
       type: 'checkbox',
       virtual: true,
-      admin: { readOnly: true, position: 'sidebar' },
+      admin: {
+        readOnly: true,
+        position: 'sidebar',
+        description: 'Checked when the due date has passed and the ticket is not resolved or closed. Worked out on every read, not stored.',
+      },
       hooks: {
         afterRead: [
           ({ siblingData }) =>
@@ -136,13 +165,13 @@ export const Tickets: CollectionConfig = {
     {
       name: 'resolvedAt',
       type: 'date',
-      admin: serverDate,
+      admin: { ...serverDate, description: 'Set by the server when the status moves to "Resolved".' },
       hooks: { beforeDuplicate: [() => null] },
     },
     {
       name: 'closedAt',
       type: 'date',
-      admin: serverDate,
+      admin: { ...serverDate, description: 'Set by the server when the status moves to "Closed".' },
       hooks: { beforeDuplicate: [() => null] },
     },
     {
@@ -150,7 +179,7 @@ export const Tickets: CollectionConfig = {
       type: 'array',
       labels: { singular: 'Comment', plural: 'Comments' },
       admin: {
-        description: 'Edit comments right here. The server fills in the author and time.',
+        description: 'Notes and replies on the ticket. Add and edit them right here. The server fills in the author and time.',
       },
       fields: [
         {
@@ -158,6 +187,7 @@ export const Tickets: CollectionConfig = {
           type: 'textarea',
           required: true,
           maxLength: 5000,
+          admin: { description: 'The comment text, up to 5,000 characters.' },
         },
         {
           name: 'attachments',
@@ -165,17 +195,24 @@ export const Tickets: CollectionConfig = {
           relationTo: 'media',
           hasMany: true,
           maxRows: 5,
+          admin: {
+            description: 'Up to 5 files: JPEG, PNG, WebP, PDF or plain text, 5 MB each. The file content must match its type.',
+          },
         },
         {
           name: 'author',
           type: 'relationship',
           relationTo: 'users',
-          admin: { readOnly: true },
+          admin: { readOnly: true, description: 'Set by the server to the person who wrote the comment.' },
         },
         {
           name: 'createdAt',
           type: 'date',
-          admin: { readOnly: true, date: { pickerAppearance: 'dayAndTime' } },
+          admin: {
+            readOnly: true,
+            date: { pickerAppearance: 'dayAndTime' },
+            description: 'Set by the server when the comment is added.',
+          },
         },
       ],
     },

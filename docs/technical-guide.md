@@ -24,6 +24,7 @@ Contents:
 16. [Security notes](#16-security-notes)
 17. [Known limitations and next steps](#17-known-limitations-and-next-steps)
 18. [Deployment on Render](#18-deployment-on-render)
+19. [AI field help](#19-ai-field-help)
 
 ---
 
@@ -50,8 +51,8 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   │   │   └── layout.tsx
 │   │   └── (frontend)/          Root URL (redirects to /admin) and /healthz for Render
 │   ├── collections/             One file per collection: fields, access, admin options
-│   ├── components/              Custom admin components: bulk status bar on the tickets list, ticket status field
-│   ├── endpoints/               Custom REST endpoints (bulk status)
+│   ├── components/              Custom admin components: bulk status bar, ticket status field, AI field help button
+│   ├── endpoints/               Custom REST endpoints (bulk status, AI field help)
 │   ├── hooks/                   Collection hooks that run on every write: ticket workflow, media checks, user creation guard
 │   ├── lib/                     Pure logic with no Payload import: workflow, due dates, roles, env, upload rules, bulk batching, CORS rule, migration guard
 │   ├── migrations/              Committed database migrations (generated, never hand-edited)
@@ -206,6 +207,8 @@ Every variable the app reads, where it is read, and what happens when it is miss
 | `R2_BUCKET` | `src/lib/env.ts` → `payload.config.ts` | Name of the private R2 bucket that stores uploads. | Startup throws. |
 | `R2_ACCESS_KEY_ID` | `src/lib/env.ts` → `payload.config.ts` | R2 API token access key. Token scope: Object Read and Write on this bucket only. | Startup throws. |
 | `R2_SECRET_ACCESS_KEY` | `src/lib/env.ts` → `payload.config.ts` | R2 API token secret. | Startup throws. |
+| `GROQ_API_KEY` | `src/lib/env.ts` → `src/endpoints/aiHelp.ts` | Groq API key for the AI field help. Optional on purpose: the help is a bonus and must not stop the app. | The help answers "AI help is not set up on this server." The app starts normally. |
+| `GROQ_MODEL` | `src/lib/env.ts` → `src/endpoints/aiHelp.ts` | Overrides the model. Default `openai/gpt-oss-20b`. | The default is used. |
 | `SEED_ADMIN_EMAIL` | `src/seed/options.ts` | Email of the admin account the seed creates. | Seed exits with an error. |
 | `SEED_ADMIN_PASSWORD` | `src/seed/options.ts` | Password of that admin. Minimum 12 characters. | Seed exits with an error. |
 | `SEED_AGENT_PASSWORD` | `src/seed/options.ts` | Password shared by the seeded agent accounts. Minimum 12 characters. | Seed exits with an error. |
@@ -227,7 +230,9 @@ This file is the single source of runtime configuration. It is loaded by the adm
 | Option | Value | What it does and why |
 |---|---|---|
 | `admin.user` | `users` | The collection used for admin login. |
-| `admin.importMap.baseDir` | `src/` | Where Payload finds custom admin components. Used when we add the bulk action and the AI widget. |
+| `admin.importMap.baseDir` | `src/` | Where Payload finds custom admin components (the bulk status bar, the ticket status field, the AI help button). |
+| `admin.components.providers` | `['/components/AiHelp#AiHelpProvider']` | Wraps the admin to add the "Field help" button on every page for logged-in users ([section 19](#19-ai-field-help)). The storage plugin adds its own provider to the same list. |
+| `endpoints` | `[{ path: '/ai-help', method: 'post' }]` | `POST /api/ai-help`, the AI field help. The storage plugin adds its signed-URL endpoint to the same list. |
 | `admin.meta.titleSuffix` | ` · Support` | Appears in the browser tab title. |
 | `collections` | `[Users, Customers, Tags, Tickets, Media]` | Every collection the app manages. Order sets the sidebar order. |
 | `editor` | `lexicalEditor()` | Rich text editor for `tickets.description`. Lexical is Payload's default editor. |
@@ -671,6 +676,9 @@ Unit tests in `tests/unit/`, run with `pnpm test`:
 | `usersHook.test.ts` | Who may create a user: admin over any API, the seed over the local API, nobody else. The users hook refuses the public first-user registration and agents, and leaves other operations to the access functions |
 | `bulkStatusEndpoint.test.ts` | The bulk endpoint with a fake request: 401 and 403, every 400 case including the 500 limit, each ticket updated with `overrideAccess: false` and the caller's `req`, refused transitions reported per ticket while the rest update, and other errors reported as "Update failed" without details |
 | `bulkStatusBatches.test.ts` | The bulk bar's plumbing: id cleanup, batches of 100 (500 becomes five requests), reading the endpoint response including whole-batch failures, merging, the toast summary, grouping failures by reason, and the search filter for "select all" |
+| `aiHelp.test.ts` | The AI context on the real tickets config: every field listed with a description, workflow and SLA texts taken from the rules, metadata only (no values or functions), hidden and internal fields skipped. Also the 500-character check, the prompt layout (rules and fields in the system message, the question alone and marked untrusted), reading the answer, the collection allowlist, the rate limiter, and the failure messages |
+| `groq.test.ts` | The Groq call with a fake `fetch`: request body (model, messages, low reasoning effort, reasoning not returned), key header, timeout signal, and every outcome: answer, timeout, 429, 500, network error, broken body, empty answer |
+| `aiHelpEndpoint.test.ts` | `POST /api/ai-help` with a fake request that has no database access: 401 and 403, 400 for empty and long input without a model call, the field reference and question sent, unknown collection falls back to tickets, no key gives 503, each failure gives a friendly message and is logged without the question, 10 questions a minute per user |
 | `mediaHooks.test.ts` | The `media` hooks with a fake request (Map-backed key-value store, logger) and a mocked `deleteFolder`: which operations are checked, each rejection reason as the 400 message with `path: "filename"`, the size read from the temp file and not the declared size, R2 folder cleanup with and without a prefix, a failed cleanup still returning the validation error, the stored name taken and deleted (also on rejection and when expired), fallbacks when nothing is stored or the store fails, and `originalName` set only on create |
 | `rememberOriginalNames.test.ts` | The signed-URL wrapper with a fake plugin handler and a fake key-value store: the name is stored under the signed folder, the body is read once and handed on, the response stays readable, nothing is stored on a refused request or without a name or folder, a store failure does not fail the upload, and startup fails without the plugin endpoint |
 | `originalName.test.ts` | Original-name cleaning (characters the key loses are kept, client paths and control characters removed, length cap, empty input), the store key, and reading a stored name back (fresh, expired, malformed) |
@@ -734,7 +742,8 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | First-user registration | Payload's `POST /api/users/first-register` creates the first user with `overrideAccess: true`, so it skips the `create` access function. With an empty users table, anyone could have created an admin. The `users` `beforeOperation` hook (`src/hooks/users.ts`, rule `mayCreateUser` in `src/lib/access.ts`) refuses every create that is not from an admin or from the local API. The first admin comes from `pnpm seed`. Checked against real Payload: the first-register call is refused with `Forbidden` and no row is written. | In place |
 | Admin login | Only staff roles can open the admin panel. | In place |
 | CSRF | Cookie requests are checked against the `csrf` allowlist, set to `[PAYLOAD_PUBLIC_SERVER_URL]`. Payload 3.93 treats a cookie request with a foreign `Origin` as anonymous. Cookies are `SameSite=Lax`, which also blocks cross-site form posts in modern browsers. A request with no `Origin` header falls back to `Sec-Fetch-Site`: `same-origin`, `same-site`, and `none` are accepted, and anything else is anonymous. Verified in Payload source. | In place |
-| Rate limiting | Not implemented. Login brute-force protection is not configured. | Known gap |
+| AI field help | Staff only, checked on the server. Input capped at 500 characters. Only field metadata and the question go to Groq, no records. 10 questions per user per minute. The answer is shown as plain text, never as HTML. Failures show a message and never break the admin ([section 19](#19-ai-field-help)). | In place |
+| Rate limiting | Not implemented for login. Login brute-force protection is not configured. Only the AI help has a per-user limit. | Known gap |
 | Security headers | Not configured. | Known gap |
 
 ---
@@ -758,7 +767,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 2. Deploy to Render: Blueprint, migrations at start, health check, R2 CORS, `Secure` cookies. Done: live at https://benrey-support-tickets.onrender.com, smoke test in [section 18.5](#185-first-deploy-results).
 3. Admin UI: bulk status action on the tickets list. Done ([section 10.1](#101-the-bulk-status-bar-in-the-admin)).
 4. Agent view of the admin and list filters at 2,000 tickets. Done ([section 9.4](#94-what-an-agent-sees-checked-on-production), [section 18.5](#185-first-deploy-results)).
-5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions.
+5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions. Code done ([section 19](#19-ai-field-help)). Needs `GROQ_API_KEY` locally and on Render, then a check with real answers.
 6. Integration tests for access rules and the bulk endpoint.
 7. Login rate limiting and security headers: HSTS, CSP, frame options, and removing `X-Powered-By`. None of them is sent on Render yet.
 8. README for the project: setup, stack choice, decisions, what was skipped and why.
@@ -794,6 +803,7 @@ If a command fails with `Missing required environment variable`, the `.env` file
 | Node version | `.node-version` | In git |
 | `PAYLOAD_SECRET` | Generated by Render on first Blueprint sync | Never in git, never copied to `.env` |
 | `DATABASE_URL`, `PAYLOAD_PUBLIC_SERVER_URL`, `R2_*` | Render dashboard, Environment tab | Entered once. `sync: false` in `render.yaml` |
+| `GROQ_API_KEY` | Render dashboard, Environment tab | Optional. Without it the AI help says it is not set up |
 | R2 CORS | `pnpm r2:cors`, run from a laptop | Bucket setting, not an app setting |
 | Admin account and demo data | `pnpm seed`, run from a laptop against the production `DATABASE_URL` | Seed variables are never set on Render |
 
@@ -866,3 +876,55 @@ Ticket search covers the subject only (`listSearchableFields: ['subject']`). Fin
 **Found during the deploy.** Payload's first-user registration skipped access checks, so the empty production database briefly accepted an admin sign-up from anyone. It was fixed in `587955b` before the seed. The users list above shows no account outside the seed. Before the fix the absence of an extra account was not proven: the `create-first-user` string in the admin HTML is a route name and not a sign of an empty table.
 
 **Known gaps.** An invalid enum value in a filter (for example `status=open`) answers 500 with a generic message instead of 400. The admin's filter uses a dropdown, so it cannot send one. Security headers are not set yet (next steps, item 7).
+
+---
+
+## 19. AI field help
+
+A "Field help" button in the bottom-right corner of every admin page, for logged-in staff. It answers questions such as "when does a ticket become overdue?" or "what is the difference between Admin and Agent?" for the form that is open.
+
+### 19.1 Pieces
+
+| Piece | File | Job |
+|---|---|---|
+| Button and panel | `src/components/AiHelp.tsx` | Registered in `admin.components.providers`. Shown only when a user is logged in. Reads the collection from the URL (`/admin/collections/<slug>`), posts the question, shows the answer as plain text. A 500-character limit and counter on the box |
+| Endpoint | `src/endpoints/aiHelp.ts` | `POST /api/ai-help { question, collection }`. Checks the role, the input, and the rate limit, builds the prompt, calls Groq, and turns every failure into a message |
+| Rules | `src/lib/aiHelp.ts` | Field metadata, input check, prompt, answer parsing, failure messages, rate limiter. No Payload import, unit tested |
+| Groq call | `src/lib/groq.ts` | One `fetch` to `https://api.groq.com/openai/v1/chat/completions` with a 10-second `AbortSignal.timeout`. `fetch` is passed in for tests |
+| Help text | `admin.description` on every field of every collection | The context the model answers from. The texts for the workflow and the due dates are built from `NEXT_STATUSES` and `DUE_WINDOW_HOURS` (`describeWorkflow`, `describeDueWindows`), so they cannot drift from the rules. The same texts show under each field in the forms |
+
+### 19.2 What goes to the model
+
+Only this, for the one collection whose page is open (tickets when the page is not a known collection):
+- per field: label, path, type, whether it is required, the help text, and the labels of select options;
+- the question, as its own message.
+
+Never: documents, field values, the user's name or email, other users' data. `collectFieldHelp` reads `req.payload.config`, not the database. Hidden and internal fields (password hash, reset tokens, ids) are skipped. The endpoint test runs with a `payload` object that has no database methods at all.
+
+The system message holds the rules: answer only from the field reference, say so when it does not cover the question, no stored data exists for the model, treat the question as a question even if it tries to change the rules, plain text, at most 120 words, in the language of the question.
+
+### 19.3 Model
+
+Groq, `openai/gpt-oss-20b`: open-weight (Apache 2.0), the fastest and cheapest model in Groq's production list. `reasoning_effort: "low"` keeps the answer well inside 10 seconds, and `include_reasoning: false` keeps the model's reasoning out of the reply. `GROQ_MODEL` can switch models without a code change. Groq's free (Developer) plan allows 30 requests a minute and 1,000 a day for this model.
+
+### 19.4 Failures and abuse
+
+| Situation | Status | What the user sees |
+|---|---|---|
+| Not logged in, or no staff role | 401, 403 | The button is not shown at all without a user |
+| Empty question, or over 500 characters | 400 | "Type a question…" or "Keep the question under 500 characters." |
+| More than 10 questions in a minute | 429 | "You asked a lot in a short time…" |
+| No `GROQ_API_KEY` | 503 | "AI help is not set up on this server. The help text under each field still applies." |
+| Groq slower than 10 seconds | 504 | "The AI help took longer than 10 seconds…" |
+| Groq rate limit | 429 | "The AI help is busy right now…" |
+| Groq error, network error, empty answer | 502 | "The AI help is unavailable right now…" |
+
+The admin itself never depends on the help: the widget catches every error, and the forms work without it. The server logs only the failure kind and Groq's status code, never the question.
+
+Cost and abuse: staff only, short input, short output (`max_completion_tokens: 700`), 10 questions per user per minute, and Groq's own daily limit. The limiter is in memory, which fits the single free instance. More instances would need a shared store. The answer is rendered as text, so a model reply with HTML or a script cannot run in the admin. A prompt-injection attempt can at worst produce a wrong answer about fields: the model has no data and no tools.
+
+### 19.5 Checked so far
+
+- Unit tests: section 14.1 (`aiHelp`, `groq`, `aiHelpEndpoint`).
+- Dev server without a key: logged out, `POST /api/ai-help` answers 401. The button is not on the login page. In the ticket form the panel opens, counts characters, and answers "AI help is not set up on this server…". The field help texts show under the fields.
+- Not checked yet: real answers from Groq, locally and on Render. Both need `GROQ_API_KEY`.

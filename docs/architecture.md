@@ -325,6 +325,14 @@ Access by role:
 - **Verified against:** Render docs (Node version precedence, pre-deploy availability, build resources), `@payloadcms/drizzle` 3.93.0 `migrate.js` (the prompt and `process.exit(0)`), and Payload's cookie defaults (`secure: false`). Locally: production build and start, `pnpm migrate` exiting 1 on the dev branch, plain `payload migrate` hanging without a terminal, `Secure` cookie on login, and a browser upload after the CORS change.
 - **Revisit when:** The service moves to a paid instance (use the pre-deploy command), or a second instance is added (migrations must then run once, not per instance).
 
+### ADR-025: AI field help as a global admin button backed by Groq gpt-oss-20b
+- **Context:** ADR-016 set the approach: an admin component, a custom endpoint, field metadata as the only context, 500 characters, 10 seconds, friendly failures. Most fields had no `admin.description`, so there was little real context.
+- **Choice:** One "Field help" button on every admin page (`admin.components.providers`) instead of a component per edit view. It sends the collection of the open page, and the endpoint builds the field reference for that collection only. Every field got a written `admin.description`; the workflow and due-date texts are generated from the rule constants. The model is Groq `openai/gpt-oss-20b` with low reasoning effort and reasoning not returned. `GROQ_API_KEY` is optional: without it the help says it is not set up. 10 questions per user per minute, in memory.
+- **Why:** One component covers lists and forms without editing every collection's views. Generated help text keeps the form hints, the AI context and the rules in one place. An optional key keeps the bonus feature from blocking startup, which the hard-fail rule is for.
+- **Tradeoff:** The help does not know which field the cursor is on, only the form. The in-memory limit resets on restart and does not span instances. A reasoning model is slower than a plain one, so low effort is required to stay inside 10 seconds.
+- **Verified against:** Groq docs (production models, Developer plan limits, `reasoning_effort` and `include_reasoning` for gpt-oss). Unit tests for every failure path. A dev-server check without a key.
+- **Revisit when:** Answers get slow or Groq retires the model (change `GROQ_MODEL`), the app runs more than one instance (move the limit to a shared store), or users need help for the focused field.
+
 ## Cost Estimate
 
 - **Monthly now:** $0 (Render free, Neon free, R2 free tier, Groq free tier when added)
@@ -384,6 +392,7 @@ Access by role:
 | 2026-11-11 | Workflow applies to new tickets | Creating a ticket now counts as a move out of `new`: only `new`, `in_progress` with an assignee, or `closed` are accepted. Before, the checks ran on updates only. The seed walks each ticket through the workflow with `statusPath` instead of creating it in its final status. |
 | 2026-11-11 | Docs review | Agent Rules synced with CLAUDE.md: added the technical-guide sync rule, the no-default-role rule, and the CSRF allowlist rule, which were only in CLAUDE.md. |
 | 2026-11-11 | Status choices in the admin | Every ticket now starts as `new`: the create form shows the status read-only and the hook refuses any other start status. The field is not hidden with `admin.condition`, because that would make the column nullable. The edit form's status select (a custom field component) offers only the saved status and its allowed next steps. Duplicates start as `new`. The seed creates every ticket as `new` and walks it to its status. |
+| 2026-11-11 | AI field help | Added ADR-025: a global "Field help" button and `POST /api/ai-help` on Groq `openai/gpt-oss-20b`, field metadata only, 500 characters, 10 seconds, friendly failures, 10 questions per user per minute. Every field got an `admin.description`. `GROQ_API_KEY` is optional. |
 
 ---
 To update, run `/planfirst` again.
