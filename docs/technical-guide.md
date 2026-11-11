@@ -62,6 +62,7 @@ The app is built on **Payload CMS 3**. Payload generates the admin UI from TypeS
 │   ├── payload.config.ts        Payload runtime configuration (the central file)
 │   └── payload-types.ts         TypeScript types generated from the collections (committed)
 ├── tests/unit/                  Vitest unit tests for lib/ logic
+├── README.md                    For people: what the app does, how to run and deploy it, what was left out
 ├── package.json                 Scripts, dependencies, pnpm settings
 ├── pnpm-lock.yaml               Exact dependency versions (commit this)
 ├── tsconfig.json                TypeScript settings
@@ -770,8 +771,8 @@ If a command fails with `Missing required environment variable`, the `.env` file
 5. AI help chat (Groq, free tier) as a custom admin component, grounded in field descriptions. Done ([section 19](#19-ai-field-help)): checked with real Groq answers on the dev server. The production check with answers is open.
 6. Integration tests for access rules and the bulk endpoint.
 7. Login rate limiting and security headers: HSTS, CSP, frame options, and removing `X-Powered-By`. None of them is sent on Render yet.
-8. README for the project: setup, stack choice, decisions, what was skipped and why.
-9. OAuth (GitHub), only if time is left. Otherwise explained in the README as skipped.
+8. README for the project: setup, stack choice, decisions, what was skipped and why. Done ([README.md](../README.md)).
+9. OAuth (GitHub), only if time is left. Explained in the README as skipped for now.
 
 ### Open verification items
 
